@@ -1,4 +1,4 @@
-﻿﻿<div id="wrap">
+﻿<div id="wrap">
     <div data-ng-include="" src="'views/shared/_nav.html'"></div>
 
     <div class="container admin-views-main" data-ng-controller="ChatAccountsController">
@@ -19,9 +19,21 @@
                 </button>
                 <div data-ng-show="showTelegram" class="form-inline">
                     <div class="form-group" style="width: 100%;">
-                        <input type="text" class="form-control" style="width: 100%;" placeholder="Номер телефона" data-ng-model="phone" />
+                        <input type="tel"
+                               inputmode="tel"
+                               class="form-control"
+                               style="width: 100%;"
+                               placeholder="Номер телефона (например: +79991234567)"
+                               data-ng-model="phone"
+                               data-ng-change="onPhoneChange()"
+                               maxlength="18" />
                     </div>
-                    <button class="btn btn-primary" style="margin-top: 10px;" data-ng-click="addTelegram()">Добавить</button>
+                    <div class="help-block" data-ng-show="showTelegram && phone && !isPhoneValid">
+                        Введите номер телефона в международном формате (7–15 цифр, допускается ведущий "+").
+                    </div>
+                    <div style="text-align: center; margin-top: 10px;">
+                        <button class="btn btn-primary" data-ng-click="addTelegram()" data-ng-disabled="!isPhoneValid">Добавить</button>
+                    </div>
                 </div>
             </div>
 
@@ -51,7 +63,10 @@
                 <tr data-ng-repeat="item in items">
                     <td>{{item.Platform || item.platform}}</td>
                     <td>{{item.Phone || item.phone}}</td>
-                    <td>{{item.Status || item.status}}</td>
+                    <td>
+                        <span style="display:inline-block;width:10px;height:10px;border-radius:50%;"
+                              data-ng-style="{ 'background-color': (((item.Status !== undefined ? item.Status : item.status) == 0) ? '#d9534f' : '#5cb85c') }"></span>
+                    </td>
                     <td>
                         <button class="btn btn-danger btn-sm" data-ng-click="remove(item)">Удалить</button>
                     </td>

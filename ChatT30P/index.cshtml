@@ -35,10 +35,13 @@
                     <h4 class="modal-title">Вам необходимо залогиниться для продолжения</h4>
                 </div>
                 <div class="modal-body modal-logfile">
-                    Зарегистрировавшись на сайте Вы сможете продолжить просмотр статистики социальных аккаунтов.
+                    Зарегистрировавшись на сайте, вы сможете продолжить работу с сервисом мониторинга закрытых домовых чатов.
                     <br />
                     <br />
-                    Если вам нужно выгрузить какую-то базу аккаунтов в эксель, то это можно сделать платно, обратившись ко мне на почту.
+                    Сервис помогает собирать аналитику по сообщениям, отслеживать проблемные темы и обращения жильцов, а также оценивать настроения в чатах по динамике обсуждений.
+                    <br />
+                    <br />
+                    Для подключения дополнительных функций (выгрузки, расширенная аналитика, интеграции) напишите мне на почту.
                 </div>
                 <div class="modal-footer">
                     Почта для вопросов:&nbsp;<a href="mailto:topbot@yandex.ru">topbot@yandex.ru</a>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
@@ -47,6 +50,25 @@
                 </div>
             </div>
         </div>
+    <div id="modal-no-subscription" class="modal fade">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <button type="button" class="close" aria-hidden="true"><i class="fa fa-exclamation-triangle"></i></button>
+                    <h4 class="modal-title">Нет активной подписки</h4>
+                </div>
+                <div class="modal-body">
+                    Добавлять телефоны могут только пользователи с активной подпиской.
+                    <br />
+                    <br />
+                    Для подключения тарифа напишите на почту: <a href="mailto:topbot@yandex.ru">topbot@yandex.ru</a>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-default" data-dismiss="modal">Закрыть</button>
+                </div>
+            </div>
+        </div>
+    </div>
     </div>
     <div id="container" class="app-wrapper ltr">
         <div data-ng-app="stats" data-ng-view="" id="ng-view"></div>

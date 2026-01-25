@@ -1,19 +1,27 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Configuration;
 using System.Data;
 using System.Data.SqlClient;
-using System.Net;
 using System.Net.Http;
+using System.Text;
+using System.Threading.Tasks;
+using System.Net;
 using System.Web;
 using System.Web.Http;
 using ChatT30P.Controllers.Models;
+using Core;
+using Newtonsoft.Json;
 
 namespace ChatT30P.Controllers.Api
 {
     public class ChatAccountsController : ApiController
     {
         private static string ConnectionString => ConfigurationManager.ConnectionStrings["chatConnectionString"]?.ConnectionString;
+
+        private static string AdsPowerBaseUrl => ConfigurationManager.AppSettings["AdsPower:BaseUrl"];
+        private static string AdsPowerToken => ConfigurationManager.AppSettings["AdsPower:Token"];
+        private const string AdsPowerGroupName = "CHAT";
 
         [HttpGet]
         public IEnumerable<ChatAccountItem> Get()
@@ -66,7 +74,7 @@ ORDER BY TRY_CONVERT(datetime, [created]) DESC";
         }
 
         [HttpPost]
-        public HttpResponseMessage Post(ChatAccountItem item)
+        public async Task<HttpResponseMessage> Post(ChatAccountItem item)
         {
             if (string.IsNullOrWhiteSpace(ConnectionString))
             {
@@ -77,6 +85,11 @@ ORDER BY TRY_CONVERT(datetime, [created]) DESC";
             if (string.IsNullOrEmpty(userId))
             {
                 return Request.CreateResponse(HttpStatusCode.Unauthorized);
+            }
+
+            if (!Security.IsPaid)
+            {
+                return Request.CreateResponse((HttpStatusCode)402, "No active subscription");
             }
 
             if (item == null || string.IsNullOrWhiteSpace(item.Platform) || string.IsNullOrWhiteSpace(item.Phone))
@@ -100,7 +113,98 @@ VALUES(@user_id, @platform, @phone, @status, GETDATE())";
                 cmd.ExecuteNonQuery();
             }
 
+            // Create AdsPower profile in group CHAT after inserting to DB.
+            // If AdsPower is not configured, skip.
+            if (!string.IsNullOrWhiteSpace(AdsPowerBaseUrl) && !string.IsNullOrWhiteSpace(AdsPowerToken))
+            {
+                var groupId = await EnsureAdsPowerGroupAsync(AdsPowerGroupName);
+                if (string.IsNullOrEmpty(groupId) || !await CreateAdsPowerProfileAsync(groupId, item))
+                    return Request.CreateErrorResponse(HttpStatusCode.InternalServerError, "На сервере случилась критическая ошибка, обратитесь к администратору.");
+            }
+
             return Request.CreateResponse(HttpStatusCode.OK);
+        }
+
+        private async Task<string> EnsureAdsPowerGroupAsync(string groupName)
+        {
+            // API endpoints are based on AdsPower Local API docs.
+            // Query: /api/v1/group/list?group_name=xxx
+            // Create: /api/v1/group/create
+            using (var http = new HttpClient())
+            {
+                http.Timeout = TimeSpan.FromSeconds(15);
+
+                var listUrl = $"{AdsPowerBaseUrl.TrimEnd('/')}/api/v1/group/list?group_name={Uri.EscapeDataString(groupName)}&token={Uri.EscapeDataString(AdsPowerToken)}";
+                var listResp = await http.GetAsync(listUrl);
+                if (!listResp.IsSuccessStatusCode)
+                    return null;
+                var listJson = await listResp.Content.ReadAsStringAsync();
+
+                dynamic listObj = null;
+                try { listObj = JsonConvert.DeserializeObject(listJson); } catch { }
+
+                if (listObj != null && listObj.code == 0 && listObj.data != null && listObj.data.list != null)
+                {
+                    foreach (var g in listObj.data.list)
+                    {
+                        if ((string)g.group_name == groupName)
+                        {
+                            return (string)g.group_id;
+                        }
+                    }
+                }
+
+                var createUrl = $"{AdsPowerBaseUrl.TrimEnd('/')}/api/v1/group/create?token={Uri.EscapeDataString(AdsPowerToken)}";
+                var body = new { group_name = groupName };
+                var content = new StringContent(JsonConvert.SerializeObject(body), Encoding.UTF8, "application/json");
+                var createResp = await http.PostAsync(createUrl, content);
+                if (!createResp.IsSuccessStatusCode)
+                    return null;
+                var createJson = await createResp.Content.ReadAsStringAsync();
+
+                dynamic createObj = null;
+                try { createObj = JsonConvert.DeserializeObject(createJson); } catch { }
+
+                if (createObj != null && createObj.code == 0 && createObj.data != null)
+                {
+                    // docs vary: sometimes group_id is in data.group_id
+                    if (createObj.data.group_id != null) return (string)createObj.data.group_id;
+                    if (createObj.data.id != null) return (string)createObj.data.id;
+                }
+
+                return null;
+            }
+        }
+
+        private async Task<bool> CreateAdsPowerProfileAsync(string groupId, ChatAccountItem item)
+        {
+            // Create profile: /api/v1/user/create (POST), requires group_id and fingerprint_config
+            // We'll use minimal fingerprint_config with automatic timezone.
+            var url = $"{AdsPowerBaseUrl.TrimEnd('/')}/api/v1/user/create?token={Uri.EscapeDataString(AdsPowerToken)}";
+            var body = new
+            {
+                name = $"{item.Platform}-{item.Phone}",
+                group_id = groupId,
+                domain_name = "web.telegram.org",
+                fingerprint_config = new
+                {
+                    automatic_timezone = "1"
+                }
+            };
+
+            using (var http = new HttpClient())
+            {
+                http.Timeout = TimeSpan.FromSeconds(20);
+                var content = new StringContent(JsonConvert.SerializeObject(body), Encoding.UTF8, "application/json");
+                var resp = await http.PostAsync(url, content);
+                if (!resp.IsSuccessStatusCode)
+                    return false;
+
+                var json = await resp.Content.ReadAsStringAsync();
+                dynamic obj = null;
+                try { obj = JsonConvert.DeserializeObject(json); } catch { }
+                return obj != null && obj.code == 0 && obj.data != null && obj.data.id != null;
+            }
         }
 
         [HttpDelete]

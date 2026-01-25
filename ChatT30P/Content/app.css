@@ -1,5 +1,5 @@
 ﻿html, body { height: 100%; }
-body { cursor: default; overflow-y: scroll; font-size: 14px; }
+body { margin: 0; cursor: default; overflow-y: scroll; font-size: 14px; }
 #Container, #ng-view { height: 100%; }
 #wrap { min-height: 100%; height: auto; margin: 0 auto -70px; padding: 0 0 70px; }
 .ltr-dir { direction: ltr; }

@@ -14,7 +14,7 @@ function goPay() {
 
     var config = ["$routeProvider", function ($routeProvider) {
         $routeProvider
-            .when("/", { templateUrl: "views/chataccounts.html?v=0" })
+            .when("/", { templateUrl: "views/chataccounts.html?v=1" })
         .otherwise({ redirectTo: "/" });
     }];
     app.config(config);
@@ -29,6 +29,10 @@ function goPay() {
                 }
             });
         };
+    }]);
+
+    app.run(["$rootScope", "dataService", function ($rootScope, dataService) {
+        $rootScope.checkAuth = dataService.checkAuth;
     }]);
 
     var run = ["$rootScope", "$log", function ($rootScope, $log) {
