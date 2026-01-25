@@ -18,6 +18,11 @@ namespace ChatT30P.Controllers.Api
         [HttpGet]
         public IEnumerable<ChatAccountItem> Get()
         {
+            if (string.IsNullOrWhiteSpace(ConnectionString))
+            {
+                throw new HttpResponseException(HttpStatusCode.InternalServerError);
+            }
+
             var userId = HttpContext.Current?.User?.Identity?.Name;
             if (string.IsNullOrEmpty(userId))
             {
@@ -63,6 +68,11 @@ ORDER BY TRY_CONVERT(datetime, [created]) DESC";
         [HttpPost]
         public HttpResponseMessage Post(ChatAccountItem item)
         {
+            if (string.IsNullOrWhiteSpace(ConnectionString))
+            {
+                return Request.CreateResponse(HttpStatusCode.InternalServerError);
+            }
+
             var userId = HttpContext.Current?.User?.Identity?.Name;
             if (string.IsNullOrEmpty(userId))
             {
@@ -91,6 +101,42 @@ VALUES(@user_id, @platform, @phone, @status, GETDATE())";
             }
 
             return Request.CreateResponse(HttpStatusCode.OK);
+        }
+
+        [HttpDelete]
+        public HttpResponseMessage Delete(string platform, string phone)
+        {
+            if (string.IsNullOrWhiteSpace(ConnectionString))
+            {
+                return Request.CreateResponse(HttpStatusCode.InternalServerError);
+            }
+
+            var userId = HttpContext.Current?.User?.Identity?.Name;
+            if (string.IsNullOrEmpty(userId))
+            {
+                return Request.CreateResponse(HttpStatusCode.Unauthorized);
+            }
+
+            if (string.IsNullOrWhiteSpace(platform) || string.IsNullOrWhiteSpace(phone))
+            {
+                return Request.CreateResponse(HttpStatusCode.BadRequest);
+            }
+
+            using (var cn = new SqlConnection(ConnectionString))
+            using (var cmd = cn.CreateCommand())
+            {
+                cmd.CommandText = @"
+DELETE FROM accounts
+WHERE user_id = @user_id AND platform = @platform AND phone = @phone";
+
+                cmd.Parameters.Add("@user_id", SqlDbType.NVarChar, 128).Value = userId;
+                cmd.Parameters.Add("@platform", SqlDbType.NVarChar, 32).Value = platform.Trim();
+                cmd.Parameters.Add("@phone", SqlDbType.NVarChar, 64).Value = phone.Trim();
+
+                cn.Open();
+                var affected = cmd.ExecuteNonQuery();
+                return Request.CreateResponse(affected > 0 ? HttpStatusCode.OK : HttpStatusCode.NotFound);
+            }
         }
     }
 }

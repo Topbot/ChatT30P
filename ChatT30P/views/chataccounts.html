@@ -1,0 +1,67 @@
+<div id="wrap">
+    <div data-ng-include="" src="'views/shared/_nav.html'"></div>
+
+    <div class="container admin-views-main" data-ng-controller="ChatAccountsController">
+        <div class="page-header clearfix">
+            <h2 class="page-title pull-left">
+                ??????????? ????????
+            </h2>
+        </div>
+
+        <div class="help-block" style="margin-bottom: 10px;">
+            ???????? ??????? ?? ?????? ???????? ??? ?????????.
+        </div>
+
+        <div class="row" style="margin-bottom: 15px;">
+            <div class="col-md-4">
+                <button class="btn btn-success btn-block" data-ng-click="showTelegram = !showTelegram">
+                    <i class="fa fa-telegram"></i> ????????
+                </button>
+                <div data-ng-show="showTelegram" class="form-inline">
+                    <div class="form-group" style="width: 100%;">
+                        <input type="text" class="form-control" style="width: 100%;" placeholder="????? ????????" data-ng-model="phone" />
+                    </div>
+                    <button class="btn btn-primary" style="margin-top: 10px;" data-ng-click="addTelegram()">????????</button>
+                </div>
+            </div>
+
+            <div class="col-md-4">
+                <button class="btn btn-default btn-block" disabled>
+                    <i class="fa fa-whatsapp"></i> WhatsApp
+                </button>
+            </div>
+
+            <div class="col-md-4">
+                <button class="btn btn-default btn-block" disabled>
+                    <i class="fa fa-comments"></i> MessengerMAX
+                </button>
+            </div>
+        </div>
+
+        <table class="table table-bordered table-striped table-hover table-responsive">
+            <thead>
+                <tr>
+                    <th>?????????</th>
+                    <th>????? ????????</th>
+                    <th>??????</th>
+                    <th style="width: 120px;">&nbsp;</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr data-ng-repeat="item in items">
+                    <td>{{item.Platform || item.platform}}</td>
+                    <td>{{item.Phone || item.phone}}</td>
+                    <td>{{item.Status || item.status}}</td>
+                    <td>
+                        <button class="btn btn-danger btn-sm" data-ng-click="remove(item)">???????</button>
+                    </td>
+                </tr>
+                <tr data-ng-if="!items || items.length === 0">
+                    <td colspan="4">??? ??????</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div id="footer" data-ng-include src="'views/shared/_footer.html?v=2'"></div>

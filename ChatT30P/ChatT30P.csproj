@@ -298,12 +298,14 @@
     <Content Include="Content\fonts\fontawesome-webfont.svg" />
     <Content Include="Content\toastr.css" />
     <Content Include="Content\toastr.min.css" />
+    <Content Include="Controllers\chataccounts.js" />
     <Content Include="fonts\fontawesome-webfont.svg" />
     <Content Include="fonts\glyphicons-halflings-regular.svg" />
     <Content Include="grid.min.js">
       <DependentUpon>grid.js</DependentUpon>
     </Content>
     <Content Include="images\active-filterbar.png" />
+    <Content Include="images\chat_monitoring.svg" />
     <Content Include="images\google_sign_in.png" />
     <Content Include="images\google_sign_in_dark.png" />
     <Content Include="images\instagram_sign_in.png" />
@@ -346,8 +348,6 @@
     <Content Include="libmongocrypt.so" />
     <Content Include="libmongocrypt.dylib" />
     <None Include="Properties\PublishProfiles\azure.pubxml" />
-    <Content Include="i\Getblogger.jpg" />
-    <Content Include="i\Getblogger2.jpg" />
     <Content Include="i\read.png" />
     <Content Include="i\sun.png" />
     <Content Include="mongocrypt.dll" />
@@ -1134,8 +1134,8 @@
     <Content Include="Scripts\toastr.js" />
     <Content Include="Scripts\toastr.min.js" />
     <Content Include="sitemap.xml" />
+    <Content Include="views\chataccounts.html" />
     <Content Include="views\shared\_addnew.html" />
-    <Content Include="views\linkedaccounts.html" />
     <Content Include="views\shared\_footer.html" />
     <Content Include="views\shared\_nav.html" />
     <Content Include="Web.config">
@@ -1192,9 +1192,11 @@
     <Compile Include="App_Start\IoCContainer.cs" />
     <Compile Include="App_Start\UnityConfig.cs" />
     <Compile Include="App_Start\WebApiConfig.cs" />
+    <Compile Include="Controllers\Api\ChatAccountsController.cs" />
     <Compile Include="Controllers\Api\YoutubeController.cs" />
     <Compile Include="Controllers\Contracts\IYoutubeRepository.cs" />
     <Compile Include="Controllers\Data\YoutubeRepository.cs" />
+    <Compile Include="Controllers\Models\ChatAccountItem.cs" />
     <Compile Include="Controllers\Models\YoutubeItem.cs" />
     <Compile Include="Controllers\Models\Item.cs" />
     <Compile Include="Controllers\Models\YoutubeType.cs" />

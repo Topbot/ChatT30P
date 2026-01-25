@@ -135,6 +135,16 @@ function beforeDataLoad() {
 }
 
 function onDataLoad(scope, data) {
+    if (!scope.items) {
+        scope.items = [];
+    }
+    if (!data) {
+        data = [];
+    }
+    // normalize to array
+    if (!Array.isArray(data)) {
+        data = [data];
+    }
     scope.items = arrayUnique(scope.items.concat(data));
     if (scope.items.length > 0) {
         var maxvalue = scope.items[0].Members !== undefined ? scope.items[0].Members : (scope.items[0].M !== undefined ? scope.items[0].M : 100);

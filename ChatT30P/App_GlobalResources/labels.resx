@@ -1110,7 +1110,7 @@
     <value>New passwords are required to be a minimum of {0} characters in length.</value>
   </data>
   <data name="returnToBlog" xml:space="preserve">
-    <value>Return to blog</value>
+    <value>Return to mainpage</value>
   </data>
   <data name="siteUnavailableConfirm" xml:space="preserve">
     <value>The website will be unavailable for a few seconds.\nAre you sure you wish to continue?</value>
