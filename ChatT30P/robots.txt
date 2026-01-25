@@ -1,4 +1,4 @@
-﻿Host: social.t30p.ru
+﻿Host: chat.t30p.ru
 User-agent: *
 Allow: /
 Allow: /#!/instagram

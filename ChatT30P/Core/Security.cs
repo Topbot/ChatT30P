@@ -180,7 +180,7 @@ Stack Trace:
 
                     // ignore Return URLs not beginning with a forward slash, such as remote sites.
                     if (string.IsNullOrWhiteSpace(returnUrl) ||
-                        (!returnUrl.StartsWith("/") && !returnUrl.Contains("social.t30p.ru")))
+                        (!returnUrl.StartsWith("/") && !returnUrl.Contains("chat.t30p.ru")))
                         returnUrl = null;
 
                     if (!string.IsNullOrWhiteSpace(returnUrl))

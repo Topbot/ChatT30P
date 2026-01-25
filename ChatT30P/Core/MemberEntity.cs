@@ -41,7 +41,7 @@ namespace ChatT30P.Core
         {
         }
 
-        public MemberEntity(string username) : base("social.t30p.ru", username)
+        public MemberEntity(string username) : base("chat.t30p.ru", username)
         {
         }
 
