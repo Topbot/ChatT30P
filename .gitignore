@@ -1,0 +1,26 @@
+# Visual Studio
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.VC.db
+*.VC.VC.opendb
+
+# Build artifacts
+**/[Bb]in/**
+**/[Oo]bj/**
+
+# ASP.NET publish output / web deploy packages
+**/PackageTmp/**
+**/Publish/**
+
+# NuGet
+packages/
+
+# Logs
+*.log
+
+# OS / tooling
+Thumbs.db
+.DS_Store
