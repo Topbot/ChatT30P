@@ -1,0 +1,26 @@
+[
+  {
+    "outputFileName": "Content/angular.rangeSlider.min.css",
+    "inputFiles": [
+      "Content/angular.rangeSlider.css"
+    ]
+  },
+  {
+    "outputFileName": "Scripts/angular.rangeSlider.min.js",
+    "inputFiles": [
+      "Scripts/angular.rangeSlider.js"
+    ]
+  },
+  {
+    "outputFileName": "app.min.js",
+    "inputFiles": [
+      "app.js"
+    ]
+  },
+  {
+    "outputFileName": "grid.min.js",
+    "inputFiles": [
+      "grid.js"
+    ]
+  }
+]

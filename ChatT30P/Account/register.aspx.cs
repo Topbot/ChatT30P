@@ -1,0 +1,112 @@
+using System.Net.Mail;
+using System.Text;
+using System.Web;
+using Core;
+using TopTools;
+
+namespace Account
+{
+    using System;
+    using System.Web.Security;
+    using System.Web.UI.WebControls;
+    using System.Linq;
+
+    using Page = System.Web.UI.Page;
+    using System.Web.UI.HtmlControls;
+
+    /// <summary>
+    /// The account register.
+    /// </summary>
+    public partial class Register : Page
+    {
+        #region Methods
+
+        /// <summary>
+        /// Handles the Load event of the Page control.
+        /// </summary>
+        /// <param name="sender">The source of the event.</param>
+        /// <param name="e">The <see cref="System.EventArgs"/> instance containing the event data.</param>
+        protected void Page_Load(object sender, EventArgs e)
+        {
+            HtmlAnchor HeadLoginStatus = RegisterUser.CreateUserStep.ContentTemplateContainer.FindControl("HeadLoginStatus") as HtmlAnchor;
+            if (HeadLoginStatus != null)
+            {
+                HeadLoginStatus.HRef = "/Account/login.aspx";
+            }
+
+            this.RegisterUser.ContinueDestinationPageUrl = this.Request.QueryString["ReturnUrl"];
+            this.hdnPassLength.Value = Membership.MinRequiredPasswordLength.ToString();
+
+            // if self registration not allowed and user is trying to directly
+            // navigate to register page, redirect to login
+            if (false)
+            {
+                Response.Redirect("/Account/login.aspx");
+            }
+        }
+
+        /// <summary>
+        /// Handles the CreatedUser event of the RegisterUser control.
+        /// </summary>
+        /// <param name="sender">The source of the event.</param>
+        /// <param name="e">The <see cref="System.EventArgs"/> instance containing the event data.</param>
+        protected void RegisterUser_CreatedUser(object sender, EventArgs e)
+        {
+            //string role = Roles.GetAllRoles().FirstOrDefault();
+            //if (!string.IsNullOrEmpty(role))
+            //{
+            //    Roles.AddUsersToRoles(new string[] { this.RegisterUser.UserName }, new string[] { role });
+            //}
+            SendMail(RegisterUser.Email, RegisterUser.UserName);
+            SendMail("flashr@yandex.ru", RegisterUser.UserName);
+            Security.AuthenticateUser(this.RegisterUser.UserName, this.RegisterUser.Password, false);
+
+            FormsAuthentication.SetAuthCookie(this.RegisterUser.UserName, false /* createPersistentCookie */);
+            
+            Response.Redirect("/");
+        }
+
+        /// <summary>
+        /// Handles the CreatingUser event of the RegisterUser control.
+        /// </summary>
+        /// <param name="sender">The source of the event.</param>
+        /// <param name="e">The <see cref="System.Web.UI.WebControls.LoginCancelEventArgs"/> instance containing the event data.</param>
+        protected void RegisterUser_CreatingUser(object sender, LoginCancelEventArgs e)
+        {
+            if (Membership.GetUser(this.RegisterUser.UserName) != null)
+            {
+                e.Cancel = true;
+                this.Master.SetStatus("warning", Resources.labels.anotherUserName);
+            }
+            else if (Membership.GetUserNameByEmail(this.RegisterUser.Email) != null)
+            {
+                e.Cancel = true;
+                this.Master.SetStatus("warning", Resources.labels.anotherEmail);
+            }
+        }
+      
+        /// <summary>
+        /// Sends the mail.
+        /// </summary>
+        /// <param name="email">
+        /// The email.
+        /// </param>
+        /// <param name="user">
+        /// The user name.
+        /// </param>
+        private void SendMail(string email, string user)
+        {
+            var sb = new StringBuilder();
+            sb.Append("<div style=\"font: 11px verdana, arial\">");
+            sb.AppendFormat("????????????, {0}:", HttpUtility.HtmlEncode(user));
+            sb.AppendFormat("<br/><br/>?? ??????? ???????????????? ?? ????? \"{0}\".", HttpContext.Current.Request.Url.Host);
+            sb.AppendFormat("<br/><br/>? ?????????, <a href=\"https://chat.t30p.ru/\">??????? chat.t30p.ru</a>.");
+            sb.Append("</div>");
+            Mail.SendMailMessageAsync("??????????? ?? " + HttpContext.Current.Request.Url.Host, sb.ToString(), email);
+
+            this.Master.SetStatus("success", "?????? ? ?????????????? ??????????!");
+        }
+
+        #endregion
+    }
+}
