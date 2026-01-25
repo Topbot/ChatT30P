@@ -243,9 +243,6 @@
     <Reference Include="System.Web.Services" />
     <Reference Include="System.EnterpriseServices" />
     <Reference Include="System.Xml.Linq" />
-    <Reference Include="TopTools">
-      <HintPath>..\..\TopTools\bin\Release\TopTools.dll</HintPath>
-    </Reference>
     <Reference Include="Twitch.Net, Version=1.0.0.0, Culture=neutral, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
       <HintPath>..\..\..\Trash\twitch.net-master\Twitch.Net\bin\Release\Twitch.Net.dll</HintPath>
@@ -1223,7 +1220,12 @@
       <DependentUpon>Web.config</DependentUpon>
     </None>
   </ItemGroup>
-  <ItemGroup />
+  <ItemGroup>
+    <ProjectReference Include="..\..\T30P\TopTools\TopTools.csproj">
+      <Project>{f280def6-e81b-4b44-a1f9-a91410aef8d6}</Project>
+      <Name>TopTools</Name>
+    </ProjectReference>
+  </ItemGroup>
   <ItemGroup>
     <Content Include="App_GlobalResources\labels.resx">
       <Generator>GlobalResourceProxyGenerator</Generator>
