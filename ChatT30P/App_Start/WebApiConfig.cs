@@ -1,10 +1,11 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http.Extensions.Compression.Core.Compressors;
 using System.Web.Http;
 using Microsoft.AspNet.WebApi.Extensions.Compression.Server;
 using Newtonsoft.Json;
+using System.Web.Http.ExceptionHandling;
 
 namespace ChatT30P
 {
@@ -13,6 +14,8 @@ namespace ChatT30P
         public static void Register(HttpConfiguration config)
         {
             // Web API configuration and services
+
+            config.Services.Replace(typeof(IExceptionHandler), new ChatT30P.Infrastructure.ApiExceptionHandler());
 
             // Web API routes
             config.MapHttpAttributeRoutes();

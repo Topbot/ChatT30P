@@ -96,13 +96,29 @@
         $http.post('/api/ChatAccounts', payload).then(function () {
             $scope.phone = "";
             $scope.isPhoneValid = false;
-            $scope.load();
-            if (window.$) {
-                $("#modal-wait").modal('hide');
-            }
+            $scope.load().then(function () {
+                if (window.$) {
+                    $("#modal-wait").modal('hide');
+                }
 
-            // Auto-trigger "login required" flow after successful add
-            $scope.loginRequired(payload);
+                var platform = payload.Platform || payload.platform;
+                var phone = payload.Phone || payload.phone;
+                var added = null;
+                if ($scope.items && $scope.items.length) {
+                    for (var i = 0; i < $scope.items.length; i++) {
+                        var it = $scope.items[i];
+                        var p = it.Platform || it.platform;
+                        var ph = it.Phone || it.phone;
+                        if (p === platform && ph === phone) {
+                            added = it;
+                            break;
+                        }
+                    }
+                }
+
+                // Auto-trigger "login required" flow after successful add
+                $scope.loginRequired(added || payload);
+            });
         }, function (err) {
             if (window.$) {
                 $("#modal-wait").modal('hide');

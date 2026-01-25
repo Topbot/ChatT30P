@@ -8,6 +8,7 @@ using System.Net.Http;
 using System.Text;
 using System.Threading.Tasks;
 using System.Net;
+using System.IO;
 using System.Web;
 using System.Web.Http;
 using ChatT30P.Controllers.Models;
@@ -39,7 +40,18 @@ namespace ChatT30P.Controllers.Api
             }
             catch
             {
-                // ignore logging failures
+                try
+                {
+                    var baseDir = HttpContext.Current?.Server?.MapPath("~/App_Data/logs") ?? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "App_Data", "logs");
+                    Directory.CreateDirectory(baseDir);
+                    var path = Path.Combine(baseDir, "chataccounts-errors.log");
+                    var text = ex == null ? message : (message + Environment.NewLine + ex);
+                    File.AppendAllText(path, DateTime.UtcNow.ToString("o") + " " + text + Environment.NewLine + Environment.NewLine, Encoding.UTF8);
+                }
+                catch
+                {
+                    // ignore logging failures
+                }
             }
         }
 
@@ -97,6 +109,7 @@ ORDER BY TRY_CONVERT(datetime, [created]) DESC";
         }
 
         [HttpPost]
+        [Route("api/ChatAccounts")]
         public async Task<HttpResponseMessage> Post(ChatAccountItem item)
         {
             try
@@ -176,7 +189,7 @@ VALUES(@user_id, @platform, @phone, @status, @chats_json, @ads_power_id, GETDATE
             catch (Exception ex)
             {
                 LogAdsPowerError("ChatAccounts POST failed with exception.", ex);
-                return Request.CreateErrorResponse(HttpStatusCode.InternalServerError, "На сервере случилась критическая ошибка, обратитесь к администратору.");
+                return Request.CreateErrorResponse(HttpStatusCode.InternalServerError, "На сервере случилась критическая ошибка, обратитесь к администратору.\n\n" + ex);
             }
         }
 
@@ -187,6 +200,7 @@ VALUES(@user_id, @platform, @phone, @status, @chats_json, @ads_power_id, GETDATE
         }
 
         [HttpPost]
+        [Route("api/ChatAccounts/StartLogin")]
         public async Task<HttpResponseMessage> StartLogin(StartLoginRequest request)
         {
             try
@@ -261,7 +275,7 @@ WHERE user_id = @user_id AND platform = @platform AND phone = @phone AND ads_pow
             catch (Exception ex)
             {
                 LogAdsPowerError("ChatAccounts StartLogin failed with exception.", ex);
-                return Request.CreateErrorResponse(HttpStatusCode.InternalServerError, "На сервере случилась критическая ошибка, обратитесь к администратору.");
+                return Request.CreateErrorResponse(HttpStatusCode.InternalServerError, "На сервере случилась критическая ошибка, обратитесь к администратору.\n\n" + ex);
             }
         }
 
@@ -273,6 +287,7 @@ WHERE user_id = @user_id AND platform = @platform AND phone = @phone AND ads_pow
         }
 
         [HttpPost]
+        [Route("api/ChatAccounts/SubmitCode")]
         public HttpResponseMessage SubmitCode(SubmitCodeRequest request)
         {
             try
@@ -293,7 +308,7 @@ WHERE user_id = @user_id AND platform = @platform AND phone = @phone AND ads_pow
             catch (Exception ex)
             {
                 LogAdsPowerError("ChatAccounts SubmitCode failed with exception.", ex);
-                return Request.CreateErrorResponse(HttpStatusCode.InternalServerError, "На сервере случилась критическая ошибка, обратитесь к администратору.");
+                return Request.CreateErrorResponse(HttpStatusCode.InternalServerError, "На сервере случилась критическая ошибка, обратитесь к администратору.\n\n" + ex);
             }
         }
 
