@@ -1,60 +1,0 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Diagnostics;
-using System.IO;
-using System.Linq;
-using System.Text;
-using System.Web;
-using System.Xml;
-using System.Xml.Serialization;
-using TopTools.Azure;
-
-namespace T30PStats.Core
-{
-    public class MemberEntity : TableEntity
-    {
-        private static string ContainerName = "ChatUsers";
-        private static XmlSerializer SerializerObj = new XmlSerializer(typeof(MemberEntity));
-        /// <summary>
-        /// ??? ??????
-        /// </summary>
-        private static string DataCacheDirectory
-        {
-            get
-            {
-                return Path.Combine(Environment.GetEnvironmentVariable("TEMP"), ContainerName);
-            }
-        }
-
-        /// <summary>
-        /// ??? ?????? ????? ??? ?????
-        /// </summary>
-        private string FileName
-        {
-            get
-            {
-                return Path.Combine(DataCacheDirectory, this.RowKey.Replace("|", ""));//| - ????????
-            }
-        }
-        public MemberEntity()
-        {        {        }
-        public MemberEntity(string hostname, string username)
-            : base(hostname, username)
-        /// ??????
-        /// </summary>
-        public string Password { get; set; }
-        /// <summary>
-        /// </summary>
-        public string Email { get; set; }
-        /// <summary>
-        /// ????? ?????? ???????
-        public string IsPaid { get; set; }
-        /// <summary>
-        /// ??????? ??????
-        /// </summary>
-        #region Public Function
-        /// <summary>
-        /// <returns></returns>
-        public static MemberEntity Load(string blogId, bool withAbout = false)
-        {            try
-            {                var temp = new MemberEntity(blogId);                if (File.Exists(temp.FileName))                {                    //??????? ??? ??????????? ?? ?????                    using (var filedata = File.Open(temp.FileName, FileMode.Open))                    {                        StreamReader stream = new StreamReader(filedata, Encoding.UTF8);                        return SerializerObj.Deserialize(new XmlTextReader(stream)) as MemberEntity;                    }                }                //else                //{                //    var tbl = TopTools.Azure.BlobStorage.Table("socialt30pru");                //    var item = (from i in tbl.CreateQuery<MemberEntity>()                //                where i.PartitionKey == temp.PartitionKey && i.RowKey == temp.RowKey                //                select i).FirstOrDefault();                //    if (item != null)                //    {                //        //????????? ?? ??????, ?? ??????? ? ????                //        item.Save(false);                //    }                //    return item;                //}            }            catch (Exception e)            {                Trace.Write("blogId=" + blogId + Environment.NewLine + e);            }            return null;        }        /// <summary>        /// ?????????? ???????? ? ????        /// </summary>        public void Save(bool renew = true)        {            try            {                if (!renew && File.Exists(FileName))                {                    return;//?? ??????????????                }                var sb = new StringBuilder();                SerializerObj.Serialize(new StringWriter(sb), this);                File.WriteAllText(FileName, sb.ToString());            }            catch (DirectoryNotFoundException noDir)            {                Directory.CreateDirectory(DataCacheDirectory);            }            catch (Exception e1)            {                Trace.Write(e1);            }            return;            //var tbl = TopTools.Azure.BlobStorage.Table("rating");            //try            //{            //    tbl.Execute(TableOperation.InsertOrMerge(this));            //}            //catch (StorageException e)            //{            //    var alltext = e.ToString();            //    if (alltext.Contains("The property value exceeds the maximum allowed size"))            //    {            //        try            //        {            //            this.About = String.Empty;//???????? ????????            //            tbl.Execute(TableOperation.InsertOrMerge(this));            //        }            //        catch (StorageException e2)            //        {            //            System.Diagnostics.Trace.Write(e2);            //        }            //    }            //    else            //    {            //        System.Diagnostics.Trace.Write(e);            //    }            //}        }        public void Delete()        {            try            {                if (File.Exists(FileName))                {                    File.Delete(FileName);                }            }            catch (Exception e)            {                System.Diagnostics.Trace.Write(e);            }        }        /// <summary>        /// ????????? ?????? ???? ?????????????        /// </summary>        /// <returns></returns>        public static List<MemberEntity> GetAllUsers()        {            List<MemberEntity> oRet = new List<MemberEntity>();            try            {                //var tbl = TopTools.Azure.BlobStorage.Table("socialt30pru");                //IQueryable<MemberEntity> q = tbl.CreateQuery<MemberEntity>();                //oRet = (from i in q                //            where i.PartitionKey == HttpContext.Current.Request.Url.Host                //            select i).ToList();                foreach (var file in Directory.GetFiles(DataCacheDirectory))                {                    oRet.Add(MemberEntity.Load(Path.GetFileName(file)));                }            }            catch (DirectoryNotFoundException noDir)            {                Directory.CreateDirectory(DataCacheDirectory);            }            catch (Exception e1)            {                Trace.Write(e1);            }            return oRet;        }        #e
