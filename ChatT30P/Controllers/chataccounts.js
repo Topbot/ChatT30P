@@ -2,6 +2,7 @@
     $scope.items = [];
     $scope.phone = "";
     $scope.isPhoneValid = false;
+    $scope.loginCode = "";
 
     $scope.normalizePhone = function (value) {
         if (!value) return "";
@@ -50,6 +51,28 @@
         });
     };
 
+    $scope.getChatCount = function (item) {
+        if (!item) return 0;
+        var json = item.ChatsJson || item.chats_json;
+        if (!json) return 0;
+        try {
+            var arr = angular.fromJson(json);
+            return Array.isArray(arr) ? arr.length : 0;
+        } catch (e) {
+            return 0;
+        }
+    };
+
+    $scope.loginRequired = function (item) {
+        // Placeholder for the next step (open AdsPower profile / Telegram login flow)
+        alert('Требуется залогинивание в аккаунт.');
+    };
+
+    $scope.loadChats = function (item) {
+        // Placeholder: implement server endpoint to fetch chats and update item.ChatsJson
+        alert('Загрузка чатов пока не реализована.');
+    };
+
     $scope.addTelegram = function () {
         if (window.UserVars && !window.UserVars.IsPaid && window.$) {
             $("#modal-no-subscription").modal();
@@ -58,6 +81,10 @@
         $scope.onPhoneChange();
         if (!$scope.isPhoneValid) {
             return;
+        }
+
+        if (window.$) {
+            $("#modal-wait").modal();
         }
 
         var payload = {
@@ -70,7 +97,25 @@
             $scope.phone = "";
             $scope.isPhoneValid = false;
             $scope.load();
+            if (window.$) {
+                $("#modal-wait").modal('hide');
+            }
+
+            // Auto-trigger "login required" flow after successful add
+            $scope.loginRequired(payload);
         }, function (err) {
+            if (window.$) {
+                $("#modal-wait").modal('hide');
+            }
+            if (err && err.status === 409) {
+                var msg = (err.data && (err.data.Message || err.data.message)) || 'Указанный номер телефона уже в базе';
+                if (window.toastr && toastr.error) {
+                    toastr.error(msg);
+                } else {
+                    alert(msg);
+                }
+                return;
+            }
             if (err && err.status === 402 && window.$) {
                 $("#modal-no-subscription").modal();
                 return;

@@ -31,7 +31,7 @@
         <div class="modal-dialog">
             <div class="modal-content">
                 <div class="modal-header">
-                    <button type="button" class="close" aria-hidden="true"><i class="fa fa-user"></i></button>
+                    <button type="button" class="close" data-dismiss="modal" aria-hidden="true"><i class="fa fa-user"></i></button>
                     <h4 class="modal-title">Вам необходимо залогиниться для продолжения</h4>
                 </div>
                 <div class="modal-body modal-logfile">
@@ -49,12 +49,48 @@
                     <button onclick="document.location.href = '/Account/register.aspx';" class="btn btn-success"><i class="fa fa-plus-square"></i>Зарегистрироваться</button>
                 </div>
             </div>
+
+    <div id="modal-wait" class="modal fade" data-backdrop="static" data-keyboard="false">
+        <div class="modal-dialog modal-sm" style="margin-top: 15%;">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h4 class="modal-title">Пожалуйста, подождите</h4>
+                </div>
+                <div class="modal-body" style="text-align:center;">
+                    <i class="fa fa-spinner fa-spin" style="font-size:24px;"></i>
+                    <div style="margin-top:10px;">Создаём профиль…</div>
+                </div>
+            </div>
         </div>
+    </div>
+
+    <div id="modal-login-required" class="modal fade">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <button type="button" class="close" data-dismiss="modal" aria-hidden="true">&times;</button>
+                    <h4 class="modal-title">Залогинивание аккаунта</h4>
+                </div>
+                <div class="modal-body">
+                    Вам скоро придёт код. Пожалуйста, введите его в поле для залогинивания аккаунта.
+                    <br />
+                    <br />
+                    <input type="text" class="form-control" placeholder="Код" data-ng-model="loginCode" />
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-default" data-dismiss="modal">Закрыть</button>
+                    <button type="button" class="btn btn-primary" data-ng-click="submitLoginCode()">Отправить</button>
+                </div>
+            </div>
+        </div>
+    </div>
+        </div>
+    </div>
     <div id="modal-no-subscription" class="modal fade">
         <div class="modal-dialog">
             <div class="modal-content">
                 <div class="modal-header">
-                    <button type="button" class="close" aria-hidden="true"><i class="fa fa-exclamation-triangle"></i></button>
+                    <button type="button" class="close" data-dismiss="modal" aria-hidden="true"><i class="fa fa-exclamation-triangle"></i></button>
                     <h4 class="modal-title">Нет активной подписки</h4>
                 </div>
                 <div class="modal-body">
@@ -68,7 +104,6 @@
                 </div>
             </div>
         </div>
-    </div>
     </div>
     <div id="container" class="app-wrapper ltr">
         <div data-ng-app="stats" data-ng-view="" id="ng-view"></div>

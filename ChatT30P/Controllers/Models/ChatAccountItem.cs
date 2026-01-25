@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 
 namespace ChatT30P.Controllers.Models
 {
@@ -8,6 +8,8 @@ namespace ChatT30P.Controllers.Models
         public string Platform { get; set; }
         public string Phone { get; set; }
         public int Status { get; set; }
+        public string ChatsJson { get; set; }
+        public string AdsPowerId { get; set; }
         public DateTime? Created { get; set; }
     }
 }

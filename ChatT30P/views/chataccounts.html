@@ -66,6 +66,19 @@
                     <td>
                         <span style="display:inline-block;width:10px;height:10px;border-radius:50%;"
                               data-ng-style="{ 'background-color': (((item.Status !== undefined ? item.Status : item.status) == 0) ? '#d9534f' : '#5cb85c') }"></span>
+                        <span style="display:inline-block; width:10px;"></span>
+
+                        <button class="btn btn-xs btn-warning"
+                                data-ng-if="(item.Status !== undefined ? item.Status : item.status) == 0"
+                                data-ng-click="loginRequired(item)">
+                            Требуется залогинивание
+                        </button>
+
+                        <button class="btn btn-xs btn-primary"
+                                data-ng-if="(item.Status !== undefined ? item.Status : item.status) == 1"
+                                data-ng-click="loadChats(item)">
+                            {{ (getChatCount(item) > 0) ? ('Найдено ' + getChatCount(item) + ' чатов') : 'Загрузить чаты' }}
+                        </button>
                     </td>
                     <td>
                         <button class="btn btn-danger btn-sm" data-ng-click="remove(item)">Удалить</button>

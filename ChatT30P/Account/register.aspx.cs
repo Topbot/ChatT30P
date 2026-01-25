@@ -100,7 +100,6 @@ namespace Account
             sb.Append("<div style=\"font: 11px verdana, arial\">");
             sb.AppendFormat("Привет {0}:", HttpUtility.HtmlEncode(user));
             sb.AppendFormat("<br/><br/>Вы зарегистрировались на проекте \"{0}\"", HttpContext.Current.Request.Url.Host);
-            sb.AppendFormat("<br/><br/>С уважением, <a href=\"http://chat.t30p.ru/\">{0}</a>.", "Статистика социальных аккаунтов");
             sb.Append("</div>");
             Mail.SendMailMessageAsync("Успешная регистрация", sb.ToString(), email);
 

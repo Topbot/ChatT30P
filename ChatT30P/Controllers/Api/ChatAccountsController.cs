@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Configuration;
 using System.Data;
 using System.Data.SqlClient;
+using System.Diagnostics;
 using System.Net.Http;
 using System.Text;
 using System.Threading.Tasks;
@@ -21,7 +22,26 @@ namespace ChatT30P.Controllers.Api
 
         private static string AdsPowerBaseUrl => ConfigurationManager.AppSettings["AdsPower:BaseUrl"];
         private static string AdsPowerToken => ConfigurationManager.AppSettings["AdsPower:Token"];
+        private static string AdsPowerProxyId => ConfigurationManager.AppSettings["AdsPower:ProxyId"];
         private const string AdsPowerGroupName = "CHAT";
+
+        private const string EventLogSource = "ChatT30P";
+
+        private static void LogAdsPowerError(string message, Exception ex = null)
+        {
+            try
+            {
+                if (!EventLog.SourceExists(EventLogSource))
+                    EventLog.CreateEventSource(EventLogSource, "Application");
+
+                var text = ex == null ? message : (message + Environment.NewLine + ex);
+                EventLog.WriteEntry(EventLogSource, text, EventLogEntryType.Error);
+            }
+            catch
+            {
+                // ignore logging failures
+            }
+        }
 
         [HttpGet]
         public IEnumerable<ChatAccountItem> Get()
@@ -45,7 +65,8 @@ namespace ChatT30P.Controllers.Api
                 // `created` column is optional; if it doesn't exist the query will fail.
                 // If your schema doesn't have it, remove it from the SELECT and ORDER BY.
                 cmd.CommandText = @"
-SELECT user_id, platform, phone, status,
+SELECT user_id, platform, phone, status, chats_json,
+       ads_power_id,
        TRY_CONVERT(datetime, [created]) AS created
 FROM accounts
 WHERE user_id = @user_id
@@ -64,7 +85,9 @@ ORDER BY TRY_CONVERT(datetime, [created]) DESC";
                             Platform = r[1] as string,
                             Phone = r[2] as string,
                             Status = r[3] == DBNull.Value ? 0 : Convert.ToInt32(r[3]),
-                            Created = r[4] == DBNull.Value ? (DateTime?)null : Convert.ToDateTime(r[4])
+                            ChatsJson = r[4] as string,
+                            AdsPowerId = r[5] as string,
+                            Created = r[6] == DBNull.Value ? (DateTime?)null : Convert.ToDateTime(r[6])
                         });
                     }
                 }
@@ -76,10 +99,13 @@ ORDER BY TRY_CONVERT(datetime, [created]) DESC";
         [HttpPost]
         public async Task<HttpResponseMessage> Post(ChatAccountItem item)
         {
-            if (string.IsNullOrWhiteSpace(ConnectionString))
+            try
             {
-                return Request.CreateResponse(HttpStatusCode.InternalServerError);
-            }
+                if (string.IsNullOrWhiteSpace(ConnectionString))
+                {
+                    LogAdsPowerError("ChatAccounts POST failed: chatConnectionString is missing.");
+                    return Request.CreateErrorResponse(HttpStatusCode.InternalServerError, "На сервере случилась критическая ошибка, обратитесь к администратору.");
+                }
 
             var userId = HttpContext.Current?.User?.Identity?.Name;
             if (string.IsNullOrEmpty(userId))
@@ -97,32 +123,178 @@ ORDER BY TRY_CONVERT(datetime, [created]) DESC";
                 return Request.CreateResponse(HttpStatusCode.BadRequest);
             }
 
+            // Create AdsPower profile first. If AdsPower returns an error, do not write to DB.
+            string adsPowerId;
+            if (!string.IsNullOrWhiteSpace(AdsPowerBaseUrl) && !string.IsNullOrWhiteSpace(AdsPowerToken))
+            {
+                var groupId = await EnsureAdsPowerGroupAsync(AdsPowerGroupName);
+                adsPowerId = await CreateAdsPowerProfileAsync(groupId, item);
+                if (string.IsNullOrEmpty(groupId) || string.IsNullOrEmpty(adsPowerId))
+                    return Request.CreateErrorResponse(HttpStatusCode.InternalServerError, "На сервере случилась критическая ошибка, обратитесь к администратору.");
+            }
+            else
+            {
+                return Request.CreateErrorResponse(HttpStatusCode.InternalServerError, "На сервере случилась критическая ошибка, обратитесь к администратору.");
+            }
+
             using (var cn = new SqlConnection(ConnectionString))
             using (var cmd = cn.CreateCommand())
             {
+                // Cleanup: remove stale rows without AdsPower profile ID (older than 1 hour)
                 cmd.CommandText = @"
-INSERT INTO accounts(user_id, platform, phone, status, created)
-VALUES(@user_id, @platform, @phone, @status, GETDATE())";
+DELETE FROM accounts
+WHERE ads_power_id IS NULL
+  AND TRY_CONVERT(datetime, [created]) < DATEADD(hour, -1, GETDATE())";
+
+                cn.Open();
+                cmd.ExecuteNonQuery();
+
+                cmd.CommandText = @"
+INSERT INTO accounts(user_id, platform, phone, status, chats_json, ads_power_id, created)
+VALUES(@user_id, @platform, @phone, @status, @chats_json, @ads_power_id, GETDATE())";
 
                 cmd.Parameters.Add("@user_id", SqlDbType.NVarChar, 128).Value = userId;
                 cmd.Parameters.Add("@platform", SqlDbType.NVarChar, 32).Value = item.Platform.Trim();
                 cmd.Parameters.Add("@phone", SqlDbType.NVarChar, 64).Value = item.Phone.Trim();
                 cmd.Parameters.Add("@status", SqlDbType.Int).Value = item.Status;
+                cmd.Parameters.Add("@chats_json", SqlDbType.NVarChar).Value = (object)(item.ChatsJson ?? "[]") ?? DBNull.Value;
+                cmd.Parameters.Add("@ads_power_id", SqlDbType.NVarChar, 128).Value = (object)adsPowerId ?? DBNull.Value;
+
+                try
+                {
+                    cmd.ExecuteNonQuery();
+                }
+                catch (SqlException ex) when (ex.Number == 2601 || ex.Number == 2627)
+                {
+                    // Unique constraint violation (duplicate key)
+                    return Request.CreateErrorResponse(HttpStatusCode.Conflict, "Указанный номер телефона уже в базе");
+                }
+            }
+
+                return Request.CreateResponse(HttpStatusCode.OK);
+            }
+            catch (Exception ex)
+            {
+                LogAdsPowerError("ChatAccounts POST failed with exception.", ex);
+                return Request.CreateErrorResponse(HttpStatusCode.InternalServerError, "На сервере случилась критическая ошибка, обратитесь к администратору.");
+            }
+        }
+
+        public class StartLoginRequest
+        {
+            public string Platform { get; set; }
+            public string Phone { get; set; }
+        }
+
+        [HttpPost]
+        public async Task<HttpResponseMessage> StartLogin(StartLoginRequest request)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(ConnectionString))
+                {
+                    LogAdsPowerError("ChatAccounts StartLogin failed: chatConnectionString is missing.");
+                    return Request.CreateErrorResponse(HttpStatusCode.InternalServerError, "На сервере случилась критическая ошибка, обратитесь к администратору.");
+                }
+
+            var userId = HttpContext.Current?.User?.Identity?.Name;
+            if (string.IsNullOrEmpty(userId))
+                return Request.CreateResponse(HttpStatusCode.Unauthorized);
+
+            if (!Security.IsPaid)
+                return Request.CreateResponse((HttpStatusCode)402, "No active subscription");
+
+            if (request == null || string.IsNullOrWhiteSpace(request.Platform) || string.IsNullOrWhiteSpace(request.Phone))
+                return Request.CreateResponse(HttpStatusCode.BadRequest);
+
+            // Read current row
+            string adsPowerId = null;
+            using (var cn = new SqlConnection(ConnectionString))
+            using (var cmd = cn.CreateCommand())
+            {
+                cmd.CommandText = @"
+SELECT TOP 1 ads_power_id
+FROM accounts
+WHERE user_id = @user_id AND platform = @platform AND phone = @phone";
+
+                cmd.Parameters.Add("@user_id", SqlDbType.NVarChar, 128).Value = userId;
+                cmd.Parameters.Add("@platform", SqlDbType.NVarChar, 32).Value = request.Platform.Trim();
+                cmd.Parameters.Add("@phone", SqlDbType.NVarChar, 64).Value = request.Phone.Trim();
 
                 cn.Open();
-                cmd.ExecuteNonQuery();
+                adsPowerId = cmd.ExecuteScalar() as string;
             }
 
-            // Create AdsPower profile in group CHAT after inserting to DB.
-            // If AdsPower is not configured, skip.
-            if (!string.IsNullOrWhiteSpace(AdsPowerBaseUrl) && !string.IsNullOrWhiteSpace(AdsPowerToken))
+            if (string.IsNullOrWhiteSpace(adsPowerId))
             {
-                var groupId = await EnsureAdsPowerGroupAsync(AdsPowerGroupName);
-                if (string.IsNullOrEmpty(groupId) || !await CreateAdsPowerProfileAsync(groupId, item))
+                if (string.IsNullOrWhiteSpace(AdsPowerBaseUrl) || string.IsNullOrWhiteSpace(AdsPowerToken))
+                {
+                    LogAdsPowerError("AdsPower StartLogin failed: AdsPower is not configured.");
                     return Request.CreateErrorResponse(HttpStatusCode.InternalServerError, "На сервере случилась критическая ошибка, обратитесь к администратору.");
+                }
+
+                var groupId = await EnsureAdsPowerGroupAsync(AdsPowerGroupName);
+                adsPowerId = await CreateAdsPowerProfileAsync(groupId, new ChatAccountItem { Platform = request.Platform, Phone = request.Phone });
+                if (string.IsNullOrWhiteSpace(groupId) || string.IsNullOrWhiteSpace(adsPowerId))
+                    return Request.CreateErrorResponse(HttpStatusCode.InternalServerError, "На сервере случилась критическая ошибка, обратитесь к администратору.");
+
+                using (var cn = new SqlConnection(ConnectionString))
+                using (var cmd = cn.CreateCommand())
+                {
+                    cmd.CommandText = @"
+UPDATE accounts
+SET ads_power_id = @ads_power_id
+WHERE user_id = @user_id AND platform = @platform AND phone = @phone AND ads_power_id IS NULL";
+
+                    cmd.Parameters.Add("@ads_power_id", SqlDbType.NVarChar, 128).Value = adsPowerId;
+                    cmd.Parameters.Add("@user_id", SqlDbType.NVarChar, 128).Value = userId;
+                    cmd.Parameters.Add("@platform", SqlDbType.NVarChar, 32).Value = request.Platform.Trim();
+                    cmd.Parameters.Add("@phone", SqlDbType.NVarChar, 64).Value = request.Phone.Trim();
+
+                    cn.Open();
+                    cmd.ExecuteNonQuery();
+                }
             }
 
-            return Request.CreateResponse(HttpStatusCode.OK);
+                return Request.CreateResponse(HttpStatusCode.OK, new { adsPowerId });
+            }
+            catch (Exception ex)
+            {
+                LogAdsPowerError("ChatAccounts StartLogin failed with exception.", ex);
+                return Request.CreateErrorResponse(HttpStatusCode.InternalServerError, "На сервере случилась критическая ошибка, обратитесь к администратору.");
+            }
+        }
+
+        public class SubmitCodeRequest
+        {
+            public string Platform { get; set; }
+            public string Phone { get; set; }
+            public string Code { get; set; }
+        }
+
+        [HttpPost]
+        public HttpResponseMessage SubmitCode(SubmitCodeRequest request)
+        {
+            try
+            {
+                // Placeholder: actual code submission requires Telegram/AdsPower workflow.
+                if (request == null || string.IsNullOrWhiteSpace(request.Platform) || string.IsNullOrWhiteSpace(request.Phone) || string.IsNullOrWhiteSpace(request.Code))
+                    return Request.CreateResponse(HttpStatusCode.BadRequest);
+
+                var userId = HttpContext.Current?.User?.Identity?.Name;
+                if (string.IsNullOrEmpty(userId))
+                    return Request.CreateResponse(HttpStatusCode.Unauthorized);
+
+                if (!Security.IsPaid)
+                    return Request.CreateResponse((HttpStatusCode)402, "No active subscription");
+
+                return Request.CreateResponse(HttpStatusCode.OK);
+            }
+            catch (Exception ex)
+            {
+                LogAdsPowerError("ChatAccounts SubmitCode failed with exception.", ex);
+                return Request.CreateErrorResponse(HttpStatusCode.InternalServerError, "На сервере случилась критическая ошибка, обратитесь к администратору.");
+            }
         }
 
         private async Task<string> EnsureAdsPowerGroupAsync(string groupName)
@@ -134,49 +306,68 @@ VALUES(@user_id, @platform, @phone, @status, GETDATE())";
             {
                 http.Timeout = TimeSpan.FromSeconds(15);
 
-                var listUrl = $"{AdsPowerBaseUrl.TrimEnd('/')}/api/v1/group/list?group_name={Uri.EscapeDataString(groupName)}&token={Uri.EscapeDataString(AdsPowerToken)}";
-                var listResp = await http.GetAsync(listUrl);
-                if (!listResp.IsSuccessStatusCode)
-                    return null;
-                var listJson = await listResp.Content.ReadAsStringAsync();
-
-                dynamic listObj = null;
-                try { listObj = JsonConvert.DeserializeObject(listJson); } catch { }
-
-                if (listObj != null && listObj.code == 0 && listObj.data != null && listObj.data.list != null)
+                try
                 {
-                    foreach (var g in listObj.data.list)
+                    var listUrl = $"{AdsPowerBaseUrl.TrimEnd('/')}/api/v1/group/list?group_name={Uri.EscapeDataString(groupName)}&token={Uri.EscapeDataString(AdsPowerToken)}";
+                    var listResp = await http.GetAsync(listUrl);
+                    var listJson = await listResp.Content.ReadAsStringAsync();
+
+                    if (!listResp.IsSuccessStatusCode)
                     {
-                        if ((string)g.group_name == groupName)
+                        LogAdsPowerError($"AdsPower group list failed. Status={(int)listResp.StatusCode}. Body={listJson}");
+                        return null;
+                    }
+
+                    dynamic listObj = null;
+                    try { listObj = JsonConvert.DeserializeObject(listJson); }
+                    catch (Exception ex) { LogAdsPowerError($"AdsPower group list JSON parse failed. Body={listJson}", ex); }
+
+                    if (listObj != null && listObj.code == 0 && listObj.data != null && listObj.data.list != null)
+                    {
+                        foreach (var g in listObj.data.list)
                         {
-                            return (string)g.group_id;
+                            if ((string)g.group_name == groupName)
+                            {
+                                return (string)g.group_id;
+                            }
                         }
                     }
-                }
 
-                var createUrl = $"{AdsPowerBaseUrl.TrimEnd('/')}/api/v1/group/create?token={Uri.EscapeDataString(AdsPowerToken)}";
-                var body = new { group_name = groupName };
-                var content = new StringContent(JsonConvert.SerializeObject(body), Encoding.UTF8, "application/json");
-                var createResp = await http.PostAsync(createUrl, content);
-                if (!createResp.IsSuccessStatusCode)
+                    var createUrl = $"{AdsPowerBaseUrl.TrimEnd('/')}/api/v1/group/create?token={Uri.EscapeDataString(AdsPowerToken)}";
+                    var body = new { group_name = groupName };
+                    var content = new StringContent(JsonConvert.SerializeObject(body), Encoding.UTF8, "application/json");
+                    var createResp = await http.PostAsync(createUrl, content);
+                    var createJson = await createResp.Content.ReadAsStringAsync();
+
+                    if (!createResp.IsSuccessStatusCode)
+                    {
+                        LogAdsPowerError($"AdsPower group create failed. Status={(int)createResp.StatusCode}. Body={createJson}");
+                        return null;
+                    }
+
+                    dynamic createObj = null;
+                    try { createObj = JsonConvert.DeserializeObject(createJson); }
+                    catch (Exception ex) { LogAdsPowerError($"AdsPower group create JSON parse failed. Body={createJson}", ex); }
+
+                    if (createObj != null && createObj.code == 0 && createObj.data != null)
+                    {
+                        // docs vary: sometimes group_id is in data.group_id
+                        if (createObj.data.group_id != null) return (string)createObj.data.group_id;
+                        if (createObj.data.id != null) return (string)createObj.data.id;
+                    }
+
+                    LogAdsPowerError($"AdsPower group create returned unexpected response. Body={createJson}");
                     return null;
-                var createJson = await createResp.Content.ReadAsStringAsync();
-
-                dynamic createObj = null;
-                try { createObj = JsonConvert.DeserializeObject(createJson); } catch { }
-
-                if (createObj != null && createObj.code == 0 && createObj.data != null)
-                {
-                    // docs vary: sometimes group_id is in data.group_id
-                    if (createObj.data.group_id != null) return (string)createObj.data.group_id;
-                    if (createObj.data.id != null) return (string)createObj.data.id;
                 }
-
-                return null;
+                catch (Exception ex)
+                {
+                    LogAdsPowerError("AdsPower group ensure failed with exception.", ex);
+                    return null;
+                }
             }
         }
 
-        private async Task<bool> CreateAdsPowerProfileAsync(string groupId, ChatAccountItem item)
+        private async Task<string> CreateAdsPowerProfileAsync(string groupId, ChatAccountItem item)
         {
             // Create profile: /api/v1/user/create (POST), requires group_id and fingerprint_config
             // We'll use minimal fingerprint_config with automatic timezone.
@@ -186,6 +377,7 @@ VALUES(@user_id, @platform, @phone, @status, GETDATE())";
                 name = $"{item.Platform}-{item.Phone}",
                 group_id = groupId,
                 domain_name = "web.telegram.org",
+                proxyid = AdsPowerProxyId,
                 fingerprint_config = new
                 {
                     automatic_timezone = "1"
@@ -194,16 +386,43 @@ VALUES(@user_id, @platform, @phone, @status, GETDATE())";
 
             using (var http = new HttpClient())
             {
-                http.Timeout = TimeSpan.FromSeconds(20);
-                var content = new StringContent(JsonConvert.SerializeObject(body), Encoding.UTF8, "application/json");
-                var resp = await http.PostAsync(url, content);
-                if (!resp.IsSuccessStatusCode)
-                    return false;
+                try
+                {
+                    if (string.IsNullOrWhiteSpace(AdsPowerProxyId))
+                    {
+                        LogAdsPowerError("AdsPower profile create aborted: AdsPower:ProxyId is not configured.");
+                        return null;
+                    }
 
-                var json = await resp.Content.ReadAsStringAsync();
-                dynamic obj = null;
-                try { obj = JsonConvert.DeserializeObject(json); } catch { }
-                return obj != null && obj.code == 0 && obj.data != null && obj.data.id != null;
+                    http.Timeout = TimeSpan.FromSeconds(20);
+                    var content = new StringContent(JsonConvert.SerializeObject(body), Encoding.UTF8, "application/json");
+                    var resp = await http.PostAsync(url, content);
+                    var json = await resp.Content.ReadAsStringAsync();
+
+                    if (!resp.IsSuccessStatusCode)
+                    {
+                        LogAdsPowerError($"AdsPower profile create failed. Status={(int)resp.StatusCode}. Body={json}");
+                        return null;
+                    }
+
+                    dynamic obj = null;
+                    try { obj = JsonConvert.DeserializeObject(json); }
+                    catch (Exception ex) { LogAdsPowerError($"AdsPower profile create JSON parse failed. Body={json}", ex); }
+
+                    var ok = obj != null && obj.code == 0 && obj.data != null && obj.data.id != null;
+                    if (!ok)
+                    {
+                        LogAdsPowerError($"AdsPower profile create returned unexpected response. Body={json}");
+                        return null;
+                    }
+
+                    return (string)obj.data.id;
+                }
+                catch (Exception ex)
+                {
+                    LogAdsPowerError("AdsPower profile create failed with exception.", ex);
+                    return null;
+                }
             }
         }
 
