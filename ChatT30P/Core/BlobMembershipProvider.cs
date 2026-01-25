@@ -1,4 +1,4 @@
-using System.Linq;
+﻿﻿using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Web;
@@ -20,7 +20,7 @@ namespace Core
     public class BlobMembershipProvider : MembershipProvider
     {
         /// <summary>
-        /// ???????, ??? ????????
+        /// Storage table name
         /// </summary>
         private const string TableName = "socialt30pru";
 

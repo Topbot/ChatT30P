@@ -1,4 +1,4 @@
-using System;
+﻿﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Web;
@@ -30,13 +30,13 @@ namespace ChatT30P.Controllers.Data
         {
             using (var db = new t30pDataContext { CommandTimeout = 300 })
             {
-                //??????????? ?? ?????????
+                // Filter by followers range
                 var query = db.top_youtubes.AsQueryable();
                 if (max != 0)
                 {
                     query = query.Where(i => i.followers >= min && i.followers <= max);
                 }
-                //???????? ???????!
+                // Search by channel / name
                 if (!string.IsNullOrEmpty(filter))
                 {
                     query = query.Where(
@@ -71,7 +71,7 @@ namespace ChatT30P.Controllers.Data
         }
 
         /// <summary>
-        /// ?????????? ????? ? JSON
+        /// Convert DB entity to DTO
         /// </summary>
         /// <param name="item"></param>
         /// <returns></returns>
@@ -81,7 +81,7 @@ namespace ChatT30P.Controllers.Data
             {
                 Id = item.channelID,  //item.id,
                 M = item.followers,
-                N = item.name +(String.IsNullOrEmpty(item.email)?"":" ??"),
+                N = item.name + (String.IsNullOrEmpty(item.email) ? "" : " 📧"),
                 A = item.about,
                 U = item.uploads,
                 U3 = item.videos_3months??0,
@@ -99,7 +99,7 @@ namespace ChatT30P.Controllers.Data
         }
 
         /// <summary>
-        /// ??? ???? ??? ?????
+        /// Youtube topics list
         /// </summary>
         private static List<string> Topics = new List<string>
         {
@@ -164,7 +164,7 @@ namespace ChatT30P.Controllers.Data
         };
 
         /// <summary>
-        /// ????????? ?????? ??? ????????
+        /// Extract topic indices
         /// </summary>
         /// <param name="topic"></param>
         /// <returns></returns>

@@ -1,7 +1,8 @@
-# Visual Studio
+﻿# Visual Studio
 .vs/
 *.suo
 *.user
+*.pubxml.user
 *.userosscache
 *.sln.docstates
 *.VC.db

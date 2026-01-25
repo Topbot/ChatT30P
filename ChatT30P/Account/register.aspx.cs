@@ -1,4 +1,4 @@
-using System.Net.Mail;
+﻿﻿using System.Net.Mail;
 using System.Text;
 using System.Web;
 using Core;
@@ -98,13 +98,13 @@ namespace Account
         {
             var sb = new StringBuilder();
             sb.Append("<div style=\"font: 11px verdana, arial\">");
-            sb.AppendFormat("?????? {0}:", HttpUtility.HtmlEncode(user));
-            sb.AppendFormat("<br/><br/>?? ?????????????????? ?? ??????? \"{0}\"", HttpContext.Current.Request.Url.Host);
-            sb.AppendFormat("<br/><br/>? ?????????, <a href=\"http://social.t30p.ru/\">{0}</a>.", "?????????? ?????????? ?????????");
+            sb.AppendFormat("Привет {0}:", HttpUtility.HtmlEncode(user));
+            sb.AppendFormat("<br/><br/>Вы зарегистрировались на проекте \"{0}\"", HttpContext.Current.Request.Url.Host);
+            sb.AppendFormat("<br/><br/>С уважением, <a href=\"http://social.t30p.ru/\">{0}</a>.", "Статистика социальных аккаунтов");
             sb.Append("</div>");
-            Mail.SendMailMessageAsync("???????? ???????????", sb.ToString(), email);
+            Mail.SendMailMessageAsync("Успешная регистрация", sb.ToString(), email);
 
-            this.Master.SetStatus("success", "?? ??????? ??????????????????!");
+            this.Master.SetStatus("success", "Вы успешно зарегистрировалиль!");
         }
 
         #endregion

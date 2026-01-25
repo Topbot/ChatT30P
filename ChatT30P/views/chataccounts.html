@@ -1,27 +1,27 @@
-<div id="wrap">
+﻿﻿<div id="wrap">
     <div data-ng-include="" src="'views/shared/_nav.html'"></div>
 
     <div class="container admin-views-main" data-ng-controller="ChatAccountsController">
         <div class="page-header clearfix">
             <h2 class="page-title pull-left">
-                ??????????? ????????
+                Привязанные аккаунты
             </h2>
         </div>
 
         <div class="help-block" style="margin-bottom: 10px;">
-            ???????? ??????? ?? ?????? ???????? ??? ?????????.
+            Добавьте аккаунт по номеру телефона для платформы.
         </div>
 
         <div class="row" style="margin-bottom: 15px;">
             <div class="col-md-4">
                 <button class="btn btn-success btn-block" data-ng-click="showTelegram = !showTelegram">
-                    <i class="fa fa-telegram"></i> ????????
+                    <i class="fa fa-telegram"></i> Телеграм
                 </button>
                 <div data-ng-show="showTelegram" class="form-inline">
                     <div class="form-group" style="width: 100%;">
-                        <input type="text" class="form-control" style="width: 100%;" placeholder="????? ????????" data-ng-model="phone" />
+                        <input type="text" class="form-control" style="width: 100%;" placeholder="Номер телефона" data-ng-model="phone" />
                     </div>
-                    <button class="btn btn-primary" style="margin-top: 10px;" data-ng-click="addTelegram()">????????</button>
+                    <button class="btn btn-primary" style="margin-top: 10px;" data-ng-click="addTelegram()">Добавить</button>
                 </div>
             </div>
 
@@ -41,9 +41,9 @@
         <table class="table table-bordered table-striped table-hover table-responsive">
             <thead>
                 <tr>
-                    <th>?????????</th>
-                    <th>????? ????????</th>
-                    <th>??????</th>
+                    <th>Платформа</th>
+                    <th>Номер телефона</th>
+                    <th>Статус</th>
                     <th style="width: 120px;">&nbsp;</th>
                 </tr>
             </thead>
@@ -53,11 +53,11 @@
                     <td>{{item.Phone || item.phone}}</td>
                     <td>{{item.Status || item.status}}</td>
                     <td>
-                        <button class="btn btn-danger btn-sm" data-ng-click="remove(item)">???????</button>
+                        <button class="btn btn-danger btn-sm" data-ng-click="remove(item)">Удалить</button>
                     </td>
                 </tr>
                 <tr data-ng-if="!items || items.length === 0">
-                    <td colspan="4">??? ??????</td>
+                    <td colspan="4">Нет данных</td>
                 </tr>
             </tbody>
         </table>

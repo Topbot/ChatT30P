@@ -1,4 +1,4 @@
-using System;
+﻿﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Web;
@@ -6,7 +6,7 @@ using System.Web;
 namespace ChatT30P.Controllers.Models
 {
     /// <summary>
-    /// ?????????? ?????? 
+    /// Base item
     /// </summary>
     [Serializable]
     public class CustomItem

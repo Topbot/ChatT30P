@@ -1,4 +1,4 @@
-using System;
+﻿﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -46,7 +46,7 @@ public class YoutubeController : ApiController
     }
 
     /// <summary>
-    /// ??? ???????? ????? ?? ?????? - ???? ????????? ???? ?? ????? ??????
+    /// Нам передали ссылку на канал - нужно добавить ее в базу
     /// </summary>
     /// <param name="data"></param>
     /// <returns></returns>
@@ -61,7 +61,7 @@ public class YoutubeController : ApiController
             Uri uri = null;
             if (bloglink.Contains("youtube.com/@") && Uri.TryCreate(bloglink,UriKind.Absolute,out uri))
             {
-                //??????? ID ??????
+                //передали имя канала
                 using (var client = new WebClient() { Encoding = System.Text.Encoding.UTF8 })
                 {
                     var page = client.DownloadString(uri.OriginalString);
@@ -82,7 +82,7 @@ public class YoutubeController : ApiController
                 {
                     using (var db = new t30pDataContext())
                     {
-                        //status = 1 ???????? ??????????
+                        //status = 1 значит добавили
                         top_youtube item = YoutubeIndex.InsertOrUpdate(db, user);
                     }
                     return Request.CreateResponse(HttpStatusCode.OK);
@@ -106,7 +106,7 @@ public class YoutubeController : ApiController
     {
         try
         {
-            // ???? ?? ????????? ???? ?? ????? ??????
+            // надо бы проверять есть ли прова админа
             if (items == null || items.Count == 0)
                 throw new HttpResponseException(HttpStatusCode.ExpectationFailed);
 

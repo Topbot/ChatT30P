@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.ObjectModel;
 using System.Collections.Generic;
 using System.Linq;
@@ -63,11 +63,11 @@ namespace Core
                 }
                 catch (ArgumentException)
                 {
-                    //?????? ?? ??????, ???????? null. catch ????? ?????????? ?????, ??? ??? ?????? ????? ??????????
+                    // Cookie value may be invalid; FormsAuthentication.Decrypt can throw and return null.
                 }
                 catch (HttpException)
                 {
-                    //?????? ?? ??????, ???????? null. catch ????? ?????????? ?????, ??? ??? ?????? ????? ??????????
+                    // Cookie value may be invalid; FormsAuthentication.Decrypt can throw and return null.
                     /*
                      * Unable to validate data. 
  Description: An unhandled exception occurred during the execution of the current web request. Please review the stack trace for more information about the error and where it originated in the code. 
@@ -84,7 +84,7 @@ Stack Trace:
    System.Web.Configuration.MachineKeySection.EncryptOrDecryptData(Boolean fEncrypt, Byte[] buf, Byte[] modifier, Int32 start, Int32 length, Boolean useValidationSymAlgo, Boolean useLegacyMode, IVType ivType, Boolean signData) +4846871
    System.Web.Configuration.MachineKeySection.EncryptOrDecryptData(Boolean fEncrypt, Byte[] buf, Byte[] modifier, Int32 start, Int32 length, Boolean useValidationSymAlgo, Boolean useLegacyMode, IVType ivType) +155
    System.Web.Security.FormsAuthentication.Decrypt(String encryptedTicket) +293
-   BlogEngine.Core.Security.ContextAuthenticateRequest(Object sender, EventArgs e) in E:\Users\jinek\Documents\Visual Studio 2008\???????\BESTUFF\Content Farm\BlogEngine.NET\DotNetSlave.BusinessLogic\Security\Security.cs:64
+                   BlogEngine.Core.Security.ContextAuthenticateRequest(Object sender, EventArgs e) in <source>:64
    System.Web.SyncEventExecutionStep.System.Web.HttpApplication.IExecutionStep.Execute() +80
    System.Web.HttpApplication.ExecuteStep(IExecutionStep step, Boolean& completedSynchronously) +266
                      * (/

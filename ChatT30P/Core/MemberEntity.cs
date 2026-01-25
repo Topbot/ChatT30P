@@ -1,4 +1,4 @@
-using System;
+﻿﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -16,7 +16,7 @@ namespace ChatT30P.Core
         private static string ContainerName = "ChatUsers";
         private static XmlSerializer SerializerObj = new XmlSerializer(typeof(MemberEntity));
         /// <summary>
-        /// ??? ?????? ????? ??? ?????
+        /// Где храним
         /// </summary>
         private static string DataCacheDirectory
         {
@@ -27,13 +27,13 @@ namespace ChatT30P.Core
         }
 
         /// <summary>
-        /// ??? ?????? ????? ??? ?????
+        /// Где храним точки для карты
         /// </summary>
         private string FileName
         {
             get
             {
-                return Path.Combine(DataCacheDirectory, this.RowKey.Replace("|", ""));//| - ????????
+                return Path.Combine(DataCacheDirectory, this.RowKey.Replace("|", ""));//| - запрещен
             }
         }
 
@@ -51,22 +51,22 @@ namespace ChatT30P.Core
         }
 
         /// <summary>
-        /// ??????
+        /// Пароль
         /// </summary>
         public string Password { get; set; }
 
         /// <summary>
-        /// ????
+        /// Мыло
         /// </summary>
         public string Email { get; set; }
 
         /// <summary>
-        /// ????? ?????? ???????
+        /// Время оплаты сервиса
         /// </summary>
         public string IsPaid { get; set; }
 
         /// <summary>
-        /// ??????? ??????
+        /// Внешний адресс
         /// </summary>
         public string Ip { get; set; }
 
@@ -74,7 +74,7 @@ namespace ChatT30P.Core
         #region Public Function
 
         /// <summary>
-        /// ???????? ?? ??
+        /// Загрузка из БД
         /// </summary>
         /// <param name="blogId"></param>
         /// <returns></returns>
@@ -85,7 +85,7 @@ namespace ChatT30P.Core
                 var temp = new MemberEntity(blogId);
                 if (File.Exists(temp.FileName))
                 {
-                    //??????? ??? ??????????? ?? ?????
+                    //пробуем уже загрузиться из файла
                     using (var filedata = File.Open(temp.FileName, FileMode.Open))
                     {
                         StreamReader stream = new StreamReader(filedata, Encoding.UTF8);
@@ -100,7 +100,7 @@ namespace ChatT30P.Core
                 //                select i).FirstOrDefault();
                 //    if (item != null)
                 //    {
-                //        //????????? ?? ??????, ?? ??????? ? ????
+                //        //загрузили из таблиц, то запишем в файл
                 //        item.Save(false);
                 //    }
                 //    return item;
@@ -114,7 +114,7 @@ namespace ChatT30P.Core
         }
 
         /// <summary>
-        /// ?????????? ???????? ? ????
+        /// Сохранение рейтинга в файл
         /// </summary>
         public void Save(bool renew = true)
         {
@@ -122,7 +122,7 @@ namespace ChatT30P.Core
             {
                 if (!renew && File.Exists(FileName))
                 {
-                    return;//?? ??????????????
+                    return;//не перезаписываем
                 }
                 var sb = new StringBuilder();
                 SerializerObj.Serialize(new StringWriter(sb), this);
@@ -149,7 +149,7 @@ namespace ChatT30P.Core
             //    {
             //        try
             //        {
-            //            this.About = String.Empty;//???????? ????????
+            //            this.About = String.Empty;//зануляем описание
             //            tbl.Execute(TableOperation.InsertOrMerge(this));
             //        }
             //        catch (StorageException e2)
@@ -180,7 +180,7 @@ namespace ChatT30P.Core
         }
 
         /// <summary>
-        /// ????????? ???????? ??? ?????
+        /// Получение списка всех пользователей
         /// </summary>
         /// <returns></returns>
         public static List<MemberEntity> GetAllUsers()
