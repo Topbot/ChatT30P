@@ -72,6 +72,19 @@ namespace ChatService
 
         private void Tick()
         {
+            WriteInfo("Tick started");
+
+            try
+            {
+                WriteInfo("Focusing AdsPower window...");
+                WindowFocusService.FocusAdsPower();
+                WriteInfo("AdsPower focus/maximize/click completed");
+            }
+            catch (Exception ex)
+            {
+                WriteError("Window focus action failed", ex);
+            }
+
             if (string.IsNullOrWhiteSpace(ConnectionString))
             {
                 WriteError("chatConnectionString is empty.");
@@ -82,6 +95,47 @@ namespace ChatService
 
             var count = GetPendingTasksCount();
             WriteInfo($"Pending RPA tasks: {count}");
+
+            var adsPowerId = TryGetNextAdsPowerId();
+            if (!string.IsNullOrWhiteSpace(adsPowerId))
+            {
+                try
+                {
+                    WriteInfo($"Filling AdsPower filter with ads_power_id='{adsPowerId}'");
+                    WindowFocusService.SelectProfileIdAndFill(adsPowerId);
+                    WriteInfo("UI automation completed");
+                }
+                catch (Exception ex)
+                {
+                    WriteError("UI automation failed", ex);
+                }
+            }
+            else
+            {
+                WriteInfo("No ads_power_id found to fill");
+            }
+
+            WriteInfo("Tick finished");
+        }
+
+        private string TryGetNextAdsPowerId()
+        {
+            try
+            {
+                using (var cn = new SqlConnection(ConnectionString))
+                using (var cmd = cn.CreateCommand())
+                {
+                    cmd.CommandText = @"SELECT TOP (1) ads_power_id FROM dbo.rpa_tasks ORDER BY id";
+                    cn.Open();
+                    var obj = cmd.ExecuteScalar();
+                    return obj == null || obj == DBNull.Value ? null : Convert.ToString(obj);
+                }
+            }
+            catch (Exception ex)
+            {
+                WriteError("Failed to read ads_power_id", ex);
+                return null;
+            }
         }
 
         private int GetPendingTasksCount()
@@ -139,6 +193,18 @@ END";
             catch
             {
             }
+
+            try
+            {
+                if (Environment.UserInteractive)
+                {
+                    Console.WriteLine(DateTime.Now.ToString("HH:mm:ss") + " " + message);
+                    Trace.WriteLine(message);
+                }
+            }
+            catch
+            {
+            }
         }
 
         private static void WriteError(string message, Exception ex = null)
@@ -147,6 +213,19 @@ END";
             {
                 var text = ex == null ? message : (message + Environment.NewLine + ex);
                 EventLog.WriteEntry(EventLogSource, text, EventLogEntryType.Error);
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                if (Environment.UserInteractive)
+                {
+                    var text = ex == null ? message : (message + Environment.NewLine + ex);
+                    Console.Error.WriteLine(DateTime.Now.ToString("HH:mm:ss") + " " + text);
+                    Trace.WriteLine(text);
+                }
             }
             catch
             {
