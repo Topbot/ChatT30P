@@ -15,7 +15,12 @@
     <meta name="yandex-verification" content="2aa0d373aace54fe" />
     @Styles.Render("~/css")
     <script type="text/javascript">
-    var UserVars = { Name: '@Security.CurrentUser.Identity.Name', IsAdmin: @Security.IsAuthenticated.ToString().ToLower(), IsPaid: @Security.IsPaid.ToString().ToLower() };
+    var UserVars = {
+        Name: '@Security.CurrentUser.Identity.Name',
+        IsAuthenticated: @Security.IsAuthenticated.ToString().ToLower(),
+        IsAdmin: @Security.IsAuthenticated.ToString().ToLower(),
+        IsPaid: @Security.IsPaid.ToString().ToLower()
+    };
     var ServerTime = '@DateTime.Now'
     if (navigator.userAgent.match(/IEMobile\/10\.0/)) {
         var msViewportStyle = document.createElement("style");

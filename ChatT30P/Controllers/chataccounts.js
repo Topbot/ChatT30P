@@ -64,8 +64,40 @@
     };
 
     $scope.loginRequired = function (item) {
-        // Placeholder for the next step (open AdsPower profile / Telegram login flow)
-        alert('Требуется залогинивание в аккаунт.');
+        if (!item) return;
+
+        if (window.$) {
+            $("#modal-wait").modal();
+        }
+
+        var payload = {
+            Platform: item.Platform || item.platform,
+            Phone: item.Phone || item.phone
+        };
+
+        $http.post('/api/ChatAccounts/StartLogin', payload).then(function () {
+            if (window.$) {
+                $("#modal-wait").modal('hide');
+            }
+
+            $scope.loginCode = "";
+            if (window.$) {
+                $("#modal-login-required").modal();
+            } else {
+                alert('Вам скоро придёт код. Пожалуйста, введите его для залогинивания аккаунта.');
+            }
+        }, function (err) {
+            if (window.$) {
+                $("#modal-wait").modal('hide');
+            }
+
+            var msg = (err && err.data && (err.data.Message || err.data.message)) || 'Не удалось запустить профиль для залогинивания.';
+            if (window.toastr && toastr.error) {
+                toastr.error(msg);
+            } else {
+                alert(msg);
+            }
+        });
     };
 
     $scope.loadChats = function (item) {
@@ -163,4 +195,20 @@
     };
 
     $scope.load();
+
+    // Show login prompt immediately for unauthenticated users
+    try {
+        if (window.$) {
+            var hasAuthCookie = (document.cookie || '').indexOf('.ASPXAUTH=') >= 0;
+            var isAuthed = hasAuthCookie;
+            if (window.UserVars) {
+                isAuthed = isAuthed || !!window.UserVars.IsAuthenticated;
+                isAuthed = isAuthed || (!!window.UserVars.Name && window.UserVars.Name !== '?');
+            }
+
+            if (!isAuthed) $("#modal-log-file").modal();
+        }
+    } catch (e) {
+        // ignore
+    }
 }]);

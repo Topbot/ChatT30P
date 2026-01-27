@@ -285,7 +285,6 @@
     <Content Include="app.min.js">
       <DependentUpon>app.js</DependentUpon>
     </Content>
-    <Content Include="App_Data\db_migrations\2026-01-25_add_accounts_ads_power_id.sql" />
     <Content Include="App_Data\labels.txt" />
     <Content Include="Content\angular.rangeSlider.css" />
     <Content Include="Content\angular.rangeSlider.min.css">

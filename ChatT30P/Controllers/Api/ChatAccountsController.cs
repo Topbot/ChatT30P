@@ -56,6 +56,7 @@ namespace ChatT30P.Controllers.Api
         }
 
         [HttpGet]
+        [Route("api/ChatAccounts")]
         public IEnumerable<ChatAccountItem> Get()
         {
             if (string.IsNullOrWhiteSpace(ConnectionString))
@@ -134,6 +135,25 @@ ORDER BY TRY_CONVERT(datetime, [created]) DESC";
             if (item == null || string.IsNullOrWhiteSpace(item.Platform) || string.IsNullOrWhiteSpace(item.Phone))
             {
                 return Request.CreateResponse(HttpStatusCode.BadRequest);
+            }
+
+            // Prevent AdsPower calls if the account already exists
+            using (var cn = new SqlConnection(ConnectionString))
+            using (var cmd = cn.CreateCommand())
+            {
+                cmd.CommandText = @"
+SELECT TOP 1 1
+FROM accounts
+WHERE user_id = @user_id AND platform = @platform AND phone = @phone";
+
+                cmd.Parameters.Add("@user_id", SqlDbType.NVarChar, 128).Value = userId;
+                cmd.Parameters.Add("@platform", SqlDbType.NVarChar, 32).Value = item.Platform.Trim();
+                cmd.Parameters.Add("@phone", SqlDbType.NVarChar, 64).Value = item.Phone.Trim();
+
+                cn.Open();
+                var exists = cmd.ExecuteScalar() != null;
+                if (exists)
+                    return Request.CreateErrorResponse(HttpStatusCode.Conflict, "Указанный номер телефона уже в базе");
             }
 
             // Create AdsPower profile first. If AdsPower returns an error, do not write to DB.
@@ -270,12 +290,74 @@ WHERE user_id = @user_id AND platform = @platform AND phone = @phone AND ads_pow
                 }
             }
 
+            // Open AdsPower profile and run RPA script
+            if (string.IsNullOrWhiteSpace(adsPowerId))
+                return Request.CreateErrorResponse(HttpStatusCode.InternalServerError, "На сервере случилась критическая ошибка, обратитесь к администратору.");
+
+            if (string.IsNullOrWhiteSpace(AdsPowerBaseUrl) || string.IsNullOrWhiteSpace(AdsPowerToken))
+            {
+                LogAdsPowerError("AdsPower StartLogin cannot open profile: AdsPower is not configured.");
+                return Request.CreateErrorResponse(HttpStatusCode.InternalServerError, "На сервере случилась критическая ошибка, обратитесь к администратору.");
+            }
+
+            var openOk = await OpenAdsPowerProfileWithRpaAsync(adsPowerId, "StartLoginTelegram", request.Phone);
+            if (!openOk)
+                return Request.CreateErrorResponse(HttpStatusCode.InternalServerError, "На сервере случилась критическая ошибка, обратитесь к администратору.");
+
                 return Request.CreateResponse(HttpStatusCode.OK, new { adsPowerId });
             }
             catch (Exception ex)
             {
                 LogAdsPowerError("ChatAccounts StartLogin failed with exception.", ex);
                 return Request.CreateErrorResponse(HttpStatusCode.InternalServerError, "На сервере случилась критическая ошибка, обратитесь к администратору.\n\n" + ex);
+            }
+        }
+
+        private async Task<bool> OpenAdsPowerProfileWithRpaAsync(string adsPowerId, string rpaScriptName, string phone)
+        {
+            try
+            {
+                using (var http = new HttpClient())
+                {
+                    http.Timeout = TimeSpan.FromSeconds(30);
+
+                    // Try direct start with launch args and RPA (AdsPower API versions vary)
+                    // Common endpoints: /api/v1/browser/start, /api/v1/user/start
+                    // We'll try browser/start first.
+                    var url = $"{AdsPowerBaseUrl.TrimEnd('/')}/api/v1/browser/start?token={Uri.EscapeDataString(AdsPowerToken)}";
+                    var body = new
+                    {
+                        user_id = adsPowerId,
+                        open_tabs = 1,
+                        launch_args = new[] { "--phone=" + (phone ?? string.Empty) },
+                        rpa = new
+                        {
+                            script_name = rpaScriptName,
+                            args = new { phone = phone }
+                        }
+                    };
+
+                    var content = new StringContent(JsonConvert.SerializeObject(body), Encoding.UTF8, "application/json");
+                    var resp = await http.PostAsync(url, content);
+                    var json = await resp.Content.ReadAsStringAsync();
+
+                    if (!resp.IsSuccessStatusCode)
+                    {
+                        LogAdsPowerError($"AdsPower profile start failed. Status={(int)resp.StatusCode}. Body={json}");
+                        return false;
+                    }
+
+                    dynamic obj = null;
+                    try { obj = JsonConvert.DeserializeObject(json); }
+                    catch (Exception ex) { LogAdsPowerError($"AdsPower profile start JSON parse failed. Body={json}", ex); }
+
+                    return obj != null && obj.code == 0;
+                }
+            }
+            catch (Exception ex)
+            {
+                LogAdsPowerError("AdsPower profile start failed with exception.", ex);
+                return false;
             }
         }
 
