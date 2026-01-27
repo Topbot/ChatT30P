@@ -321,10 +321,9 @@ WHERE user_id = @user_id AND platform = @platform AND phone = @phone AND ads_pow
                 {
                     http.Timeout = TimeSpan.FromSeconds(30);
 
-                    // Try direct start with launch args and RPA (AdsPower API versions vary)
-                    // Common endpoints: /api/v1/browser/start, /api/v1/user/start
-                    // We'll try browser/start first.
-                    var url = $"{AdsPowerBaseUrl.TrimEnd('/')}/api/v1/browser/start?token={Uri.EscapeDataString(AdsPowerToken)}";
+                    // AdsPower API versions vary:
+                    // - /api/v1/browser/start
+                    // - /api/v1/user/start
                     var body = new
                     {
                         user_id = adsPowerId,
@@ -337,13 +336,30 @@ WHERE user_id = @user_id AND platform = @platform AND phone = @phone AND ads_pow
                         }
                     };
 
-                    var content = new StringContent(JsonConvert.SerializeObject(body), Encoding.UTF8, "application/json");
-                    var resp = await http.PostAsync(url, content);
-                    var json = await resp.Content.ReadAsStringAsync();
+                    async Task<(HttpResponseMessage Resp, string Json)> PostStartAsync(string path)
+                    {
+                        var url = $"{AdsPowerBaseUrl.TrimEnd('/')}{path}?token={Uri.EscapeDataString(AdsPowerToken)}";
+                        var content = new StringContent(JsonConvert.SerializeObject(body), Encoding.UTF8, "application/json");
+                        var startResp = await http.PostAsync(url, content);
+                        var startJson = await startResp.Content.ReadAsStringAsync();
+                        return (startResp, startJson);
+                    }
+
+                    // Prefer POST variant for RPA запуск (GET обычно просто открывает профиль без RPA)
+                    var r1 = await PostStartAsync("/api/v1/browser/start");
+                    var resp = r1.Resp;
+                    var json = r1.Json;
+
+                    if (resp.StatusCode == HttpStatusCode.NotFound)
+                    {
+                        var r2 = await PostStartAsync("/api/v1/user/start");
+                        resp = r2.Resp;
+                        json = r2.Json;
+                    }
 
                     if (!resp.IsSuccessStatusCode)
                     {
-                        LogAdsPowerError($"AdsPower profile start failed. Status={(int)resp.StatusCode}. Body={json}");
+                        LogAdsPowerError($"AdsPower profile start failed. Status={(int)resp.StatusCode}. Body={json}. BaseUrl={AdsPowerBaseUrl}");
                         return false;
                     }
 
@@ -469,11 +485,31 @@ WHERE user_id = @user_id AND platform = @platform AND phone = @phone AND ads_pow
             // Create profile: /api/v1/user/create (POST), requires group_id and fingerprint_config
             // We'll use minimal fingerprint_config with automatic timezone.
             var url = $"{AdsPowerBaseUrl.TrimEnd('/')}/api/v1/user/create?token={Uri.EscapeDataString(AdsPowerToken)}";
+
+            var platform = (item?.Platform ?? string.Empty).Trim();
+            string domainName;
+            if (platform.Equals("Telegram", StringComparison.OrdinalIgnoreCase))
+            {
+                domainName = "web.telegram.org";
+            }
+            else if (platform.Equals("WhatsApp", StringComparison.OrdinalIgnoreCase))
+            {
+                domainName = "https://web.whatsapp.com";
+            }
+            else if (platform.Equals("MAX", StringComparison.OrdinalIgnoreCase) || platform.Equals("MessengerMAX", StringComparison.OrdinalIgnoreCase))
+            {
+                domainName = "web.max.ru";
+            }
+            else
+            {
+                domainName = "web.telegram.org";
+            }
+
             var body = new
             {
                 name = $"{item.Platform}-{item.Phone}",
                 group_id = groupId,
-                domain_name = "web.telegram.org",
+                domain_name = domainName,
                 proxyid = AdsPowerProxyId,
                 fingerprint_config = new
                 {
@@ -490,6 +526,8 @@ WHERE user_id = @user_id AND platform = @platform AND phone = @phone AND ads_pow
                         LogAdsPowerError("AdsPower profile create aborted: AdsPower:ProxyId is not configured.");
                         return null;
                     }
+
+                    // AdsPower proxy configuration is passed via proxyid (e.g. numeric id, random, etc.)
 
                     http.Timeout = TimeSpan.FromSeconds(20);
                     var content = new StringContent(JsonConvert.SerializeObject(body), Encoding.UTF8, "application/json");
@@ -524,7 +562,8 @@ WHERE user_id = @user_id AND platform = @platform AND phone = @phone AND ads_pow
         }
 
         [HttpDelete]
-        public HttpResponseMessage Delete(string platform, string phone)
+        [Route("api/ChatAccounts")]
+        public HttpResponseMessage Delete([FromUri] string platform, [FromUri] string phone)
         {
             if (string.IsNullOrWhiteSpace(ConnectionString))
             {
@@ -542,6 +581,35 @@ WHERE user_id = @user_id AND platform = @platform AND phone = @phone AND ads_pow
                 return Request.CreateResponse(HttpStatusCode.BadRequest);
             }
 
+            string adsPowerId = null;
+            using (var cn = new SqlConnection(ConnectionString))
+            using (var cmd = cn.CreateCommand())
+            {
+                cmd.CommandText = @"
+SELECT TOP 1 ads_power_id
+FROM accounts
+WHERE user_id = @user_id AND platform = @platform AND phone = @phone";
+
+                cmd.Parameters.Add("@user_id", SqlDbType.NVarChar, 128).Value = userId;
+                cmd.Parameters.Add("@platform", SqlDbType.NVarChar, 32).Value = platform.Trim();
+                cmd.Parameters.Add("@phone", SqlDbType.NVarChar, 64).Value = phone.Trim();
+
+                cn.Open();
+                adsPowerId = cmd.ExecuteScalar() as string;
+            }
+
+            if (!string.IsNullOrWhiteSpace(adsPowerId))
+            {
+                try
+                {
+                    DeleteAdsPowerProfile(adsPowerId);
+                }
+                catch
+                {
+                    // best-effort: still delete from DB
+                }
+            }
+
             using (var cn = new SqlConnection(ConnectionString))
             using (var cmd = cn.CreateCommand())
             {
@@ -556,6 +624,46 @@ WHERE user_id = @user_id AND platform = @platform AND phone = @phone";
                 cn.Open();
                 var affected = cmd.ExecuteNonQuery();
                 return Request.CreateResponse(affected > 0 ? HttpStatusCode.OK : HttpStatusCode.NotFound);
+            }
+        }
+
+        private void DeleteAdsPowerProfile(string adsPowerId)
+        {
+            if (string.IsNullOrWhiteSpace(AdsPowerBaseUrl) || string.IsNullOrWhiteSpace(AdsPowerToken))
+                return;
+
+            try
+            {
+                // AdsPower API common endpoint: /api/v1/user/delete?token=... (POST)
+                var url = $"{AdsPowerBaseUrl.TrimEnd('/')}/api/v1/user/delete?token={Uri.EscapeDataString(AdsPowerToken)}";
+                var body = new { user_ids = new[] { adsPowerId } };
+
+                using (var http = new HttpClient())
+                {
+                    http.Timeout = TimeSpan.FromSeconds(15);
+                    var content = new StringContent(JsonConvert.SerializeObject(body), Encoding.UTF8, "application/json");
+                    var resp = http.PostAsync(url, content).GetAwaiter().GetResult();
+                    var json = resp.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+
+                    if (!resp.IsSuccessStatusCode)
+                    {
+                        LogAdsPowerError($"AdsPower profile delete failed. Status={(int)resp.StatusCode}. Body={json}");
+                        return;
+                    }
+
+                    dynamic obj = null;
+                    try { obj = JsonConvert.DeserializeObject(json); }
+                    catch (Exception ex) { LogAdsPowerError($"AdsPower profile delete JSON parse failed. Body={json}", ex); }
+
+                    if (obj == null || obj.code != 0)
+                    {
+                        LogAdsPowerError($"AdsPower profile delete returned unexpected response. Body={json}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                LogAdsPowerError("AdsPower profile delete failed with exception.", ex);
             }
         }
     }

@@ -303,6 +303,8 @@
     <Content Include="Content\toastr.css" />
     <Content Include="Content\toastr.min.css" />
     <Content Include="Controllers\chataccounts.js" />
+    <Content Include="Controllers\chats.js" />
+    <Content Include="Controllers\users.js" />
     <Content Include="fonts\fontawesome-webfont.svg" />
     <Content Include="fonts\glyphicons-halflings-regular.svg" />
     <Content Include="grid.min.js">
@@ -1139,9 +1141,11 @@
     <Content Include="Scripts\toastr.min.js" />
     <Content Include="sitemap.xml" />
     <Content Include="views\chataccounts.html" />
+    <Content Include="views\chats.html" />
     <Content Include="views\shared\_addnew.html" />
     <Content Include="views\shared\_footer.html" />
     <Content Include="views\shared\_nav.html" />
+    <Content Include="views\users.html" />
     <Content Include="Web.config">
       <SubType>Designer</SubType>
     </Content>
@@ -1197,6 +1201,8 @@
     <Compile Include="App_Start\UnityConfig.cs" />
     <Compile Include="App_Start\WebApiConfig.cs" />
     <Compile Include="Controllers\Api\ChatAccountsController.cs" />
+    <Compile Include="Controllers\Api\QrCodeController.cs" />
+    <Compile Include="Controllers\Api\UsersController.cs" />
     <Compile Include="Controllers\Api\YoutubeController.cs" />
     <Compile Include="Controllers\Contracts\IYoutubeRepository.cs" />
     <Compile Include="Controllers\Data\YoutubeRepository.cs" />

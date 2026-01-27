@@ -1,8 +1,119 @@
-﻿angular.module('stats').controller('ChatAccountsController', ["$scope", "$http", function ($scope, $http) {
+﻿angular.module('stats').controller('ChatAccountsController', ["$scope", "$http", "$interval", "$timeout", "$rootScope", function ($scope, $http, $interval, $timeout, $rootScope) {
     $scope.items = [];
     $scope.phone = "";
     $scope.isPhoneValid = false;
     $scope.loginCode = "";
+    $scope.loginTimerText = "05:00";
+    $scope.qrCodeUrl = null;
+    $scope.qrLoading = false;
+    $scope.currentAdsPowerId = null;
+    $scope.isLoginCodeValid = false;
+
+    var loginTimerIntervalPromise = null;
+    var loginTimerTimeoutPromise = null;
+    var loginTimerDomIntervalId = null;
+    var qrPollIntervalPromise = null;
+
+    function clearLoginTimer() {
+        if (loginTimerIntervalPromise) {
+            $interval.cancel(loginTimerIntervalPromise);
+            loginTimerIntervalPromise = null;
+        }
+
+    $scope.onLoginCodeChange = function () {
+        var s = ($scope.loginCode || '').toString();
+        s = s.replace(/\D/g, '').substring(0, 6);
+        $scope.loginCode = s;
+        $scope.isLoginCodeValid = s.length === 6;
+    };
+        if (loginTimerTimeoutPromise) {
+            $timeout.cancel(loginTimerTimeoutPromise);
+            loginTimerTimeoutPromise = null;
+        }
+    }
+
+    function clearQrPolling() {
+        if (qrPollIntervalPromise) {
+            $interval.cancel(qrPollIntervalPromise);
+            qrPollIntervalPromise = null;
+        }
+        $scope.qrLoading = false;
+    }
+
+    function pollQrCode() {
+        if (!$scope.currentAdsPowerId) return;
+        $scope.qrLoading = true;
+        var url = '/api/QrCode?adsPowerId=' + encodeURIComponent($scope.currentAdsPowerId) + '&_=' + Date.now();
+        $http.get(url, { responseType: 'arraybuffer' }).then(function (r) {
+            if (r && r.status === 200 && r.data) {
+                var blob = new Blob([r.data], { type: 'image/png' });
+                var objectUrl = (window.URL || window.webkitURL).createObjectURL(blob);
+                $scope.qrCodeUrl = objectUrl;
+                clearQrPolling();
+            }
+        }, function () {
+            // 404 is expected until screenshot appears
+        });
+    }
+
+    function startLoginTimer(secondsTotal) {
+        clearLoginTimer();
+        var endAt = Date.now() + (secondsTotal * 1000);
+
+        function formatMmSs(left) {
+            var m = Math.floor(left / 60);
+            var s = left % 60;
+            return (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
+        }
+
+        function setTimerText(text) {
+            $scope.loginTimerText = text;
+            try {
+                var el = document.getElementById('login-timer-text');
+                if (el) el.textContent = text;
+            } catch (e) {
+            }
+        }
+
+        function tick() {
+            var leftMs = endAt - Date.now();
+            var left = Math.max(0, Math.ceil(leftMs / 1000));
+            var text = formatMmSs(left);
+            setTimerText(text);
+            if (left <= 0) {
+                clearLoginTimer();
+                if (window.$) {
+                    $("#modal-login-required").modal('hide');
+                }
+            }
+        }
+
+        tick();
+        // Primary timer: direct DOM updates (independent from Angular digest)
+        loginTimerDomIntervalId = setInterval(tick, 1000);
+        // Secondary: keep Angular timers to ensure cleanup even if page loses focus
+        loginTimerTimeoutPromise = $timeout(function () {
+            clearLoginTimer();
+            if (window.$) {
+                $("#modal-login-required").modal('hide');
+            }
+        }, secondsTotal * 1000);
+    }
+
+    // cleanup when modal is closed by user
+    if (window.$) {
+        $(document).on('shown.bs.modal', '#modal-login-required', function () {
+            // Ensure digest is running for bindings inside the modal
+            $rootScope.$applyAsync();
+        });
+        $(document).on('hidden.bs.modal', '#modal-login-required', function () {
+            clearLoginTimer();
+            clearQrPolling();
+            $scope.qrCodeUrl = null;
+            $scope.currentAdsPowerId = null;
+            $scope.$applyAsync();
+        });
+    }
 
     $scope.normalizePhone = function (value) {
         if (!value) return "";
@@ -37,8 +148,9 @@
     };
 
     $scope.load = function () {
-        $http.get('/api/ChatAccounts').then(function (r) {
+        return $http.get('/api/ChatAccounts').then(function (r) {
             $scope.items = r.data || [];
+            return $scope.items;
         }, function (err) {
             if (err && err.status === 401) {
                 if (typeof $scope.checkAuth === 'function') {
@@ -48,6 +160,7 @@
                 }
             }
             $scope.items = [];
+            return $scope.items;
         });
     };
 
@@ -75,27 +188,34 @@
             Phone: item.Phone || item.phone
         };
 
-        $http.post('/api/ChatAccounts/StartLogin', payload).then(function () {
-            if (window.$) {
-                $("#modal-wait").modal('hide');
-            }
-
+        $http.post('/api/ChatAccounts/StartLogin', payload).then(function (r) {
             $scope.loginCode = "";
+            $scope.qrCodeUrl = null;
+            $scope.currentAdsPowerId = (r && r.data && r.data.adsPowerId) ? r.data.adsPowerId : null;
             if (window.$) {
+                // ensure wait overlay is closed before showing next modal
+                $("#modal-wait").modal('hide');
                 $("#modal-login-required").modal();
+                // Start timer/polling after the modal is actually visible
+                $("#modal-login-required").one('shown.bs.modal', function () {
+                    startLoginTimer(5 * 60);
+                    clearQrPolling();
+                    pollQrCode();
+                    qrPollIntervalPromise = $interval(pollQrCode, 15000);
+                });
             } else {
                 alert('Вам скоро придёт код. Пожалуйста, введите его для залогинивания аккаунта.');
             }
         }, function (err) {
-            if (window.$) {
-                $("#modal-wait").modal('hide');
-            }
-
             var msg = (err && err.data && (err.data.Message || err.data.message)) || 'Не удалось запустить профиль для залогинивания.';
             if (window.toastr && toastr.error) {
                 toastr.error(msg);
             } else {
                 alert(msg);
+            }
+        }).finally(function () {
+            if (window.$) {
+                $("#modal-wait").modal('hide');
             }
         });
     };

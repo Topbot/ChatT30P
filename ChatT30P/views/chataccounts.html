@@ -26,6 +26,7 @@
                                placeholder="Номер телефона (например: +79991234567)"
                                data-ng-model="phone"
                                data-ng-change="onPhoneChange()"
+                               data-ng-keypress="$event.which === 13 && isPhoneValid && addTelegram()"
                                maxlength="18" />
                     </div>
                     <div class="help-block" data-ng-show="showTelegram && phone && !isPhoneValid">

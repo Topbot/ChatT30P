@@ -123,7 +123,7 @@ Stack Trace:
         {
             get
             {
-                return FormsAuthentication.FormsCookieName + "- "+HttpContext.Current.Request.Url.Host;
+                return FormsAuthentication.FormsCookieName + "-" + HttpContext.Current.Request.Url.Host;
             }
         }
 
@@ -250,6 +250,27 @@ Stack Trace:
                 var user = Membership.GetUser(Security.CurrentUser.Identity.Name);
                 if (user == null) return false;
                 return user.IsApproved;
+            }
+        }
+
+        public static bool IsAdmin
+        {
+            get
+            {
+                if (!IsAuthenticated) return false;
+                try
+                {
+                    var username = Security.CurrentUser.Identity.Name;
+                    if (string.IsNullOrWhiteSpace(username)) return false;
+
+                    var entity = ChatT30P.Core.MemberEntity.Load(username.ToLower());
+                    if (entity == null) return false;
+                    return string.Equals(entity.IsAdmin, "true", StringComparison.OrdinalIgnoreCase) || entity.IsAdmin == "1";
+                }
+                catch
+                {
+                    return false;
+                }
             }
         }
  

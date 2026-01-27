@@ -15,6 +15,8 @@ function goPay() {
     var config = ["$routeProvider", function ($routeProvider) {
         $routeProvider
             .when("/", { templateUrl: "views/chataccounts.html?v=1" })
+            .when("/chats", { templateUrl: "views/chats.html?v=1" })
+            .when("/users", { templateUrl: "views/users.html?v=1" })
         .otherwise({ redirectTo: "/" });
     }];
     app.config(config);
@@ -35,7 +37,7 @@ function goPay() {
         $rootScope.checkAuth = dataService.checkAuth;
     }]);
 
-    var run = ["$rootScope", "$log", function ($rootScope, $log) {
+    var run = ["$rootScope", "$log", "$location", function ($rootScope, $log, $location) {
         $rootScope.lbl = BlogAdmin.i18n;
         $rootScope.SiteVars = SiteVars;
         toastr.options.positionClass = 'toast-bottom-right';
@@ -58,6 +60,24 @@ function goPay() {
 
             }
         }, 10000);
+
+        $rootScope.$on('$routeChangeStart', function (event, next) {
+            var path = $location.path();
+            if (path === '/chats') {
+                if (!UserVars.IsPaid) {
+                    if (window.$) {
+                        $("#modal-no-subscription").modal();
+                    }
+                }
+            }
+            if (path === '/users') {
+                if (!UserVars.IsAdmin) {
+                    if (window.$) {
+                        $("#modal-no-permission").modal();
+                    }
+                }
+            }
+        });
     }];
 
     app.run(run);

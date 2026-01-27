@@ -15,9 +15,11 @@
         <div class="collapse navbar-collapse navbar-ex1-collapse" data-ng-controller="NavController">
             <ul class="nav navbar-nav">
                 <li data-ng-class="{ active: isActive('/')}"><a href="#!/">Главная</a></li>
+        <li data-ng-class="{ active: isActive('/chats')}" ><a href="#!/chats">Чаты</a></li>
+        <li ng-if="UserVars.IsAdmin" data-ng-class="{ active: isActive('/users')}" ><a href="#!/users">Пользователи</a></li>
             </ul>
             <ul class="nav navbar-nav navbar-right">
-                <li class="dropdown" ng-if="UserVars.IsAdmin">
+                <li class="dropdown" ng-if="UserVars.IsAuthenticated">
                     <a href="#" class="dropdown-toggle" data-toggle="dropdown"><i class="fa fa-user"></i> {{UserVars.Name}} <b class="caret"></b></a>
                     <ul class="dropdown-menu">
                         <li><a href="/Account/change-password.aspx"><i class="fa fa-key"></i>{{lbl.changePassword}}</a></li>
@@ -25,7 +27,7 @@
                         <li><a class="text-danger logoff" href="/Account/login.aspx?logoff"><i class="fa fa-power-off"></i>{{lbl.logoff}}</a></li>
                     </ul>
                 </li>
-                <li ng-if="!UserVars.IsAdmin">
+                <li ng-if="!UserVars.IsAuthenticated">
                     <a href="/Account/login.aspx"><i class="fa fa-user"></i> {{lbl.login}} <b class="caret"></b></a>
                 </li>
                 <li><a href="https://www.t30p.ru" title="Мониторинг приватных чатов Телеграм"><img src="/images/logo.png" alt="T30P" style="max-height: 40px !important; max-width: 100px !important; width: auto !important; height: auto !important;" /></a></li>

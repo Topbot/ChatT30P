@@ -68,6 +68,15 @@ function ValidateNewUser() {
         ShowStatus('warning', accountResources.userNameIsRequired);
         return false;
     }
+
+    var userName = $("[id$='UserName']").val();
+    // Allow only latin letters, digits and a few safe separators.
+    // Forbidden: spaces, quotes, slashes, backslashes, angle brackets, etc.
+    if (!/^[A-Za-zА-Яа-яЁё0-9._-]{3,64}$/.test(userName)) {
+        ShowStatus('warning', 'Имя пользователя может содержать только буквы (латиница/кириллица), цифры и символы . _ - (длина 3–64).');
+        return false;
+    }
+
     if ($("[id$='Email']").val().length == 0) {
         ShowStatus('warning', accountResources.emailIsRequired);
         return false;

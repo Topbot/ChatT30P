@@ -66,6 +66,11 @@ namespace ChatT30P.Core
         public string IsPaid { get; set; }
 
         /// <summary>
+        /// Админские права
+        /// </summary>
+        public string IsAdmin { get; set; }
+
+        /// <summary>
         /// Внешний адресс
         /// </summary>
         public string Ip { get; set; }

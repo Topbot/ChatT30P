@@ -17,8 +17,9 @@ namespace ChatT30P
 
             config.Services.Replace(typeof(IExceptionHandler), new ChatT30P.Infrastructure.ApiExceptionHandler());
 
-            // Web API routes
             config.MapHttpAttributeRoutes();
+
+            // Web API routes
 
             config.Routes.MapHttpRoute(
                 name: "DefaultApi",

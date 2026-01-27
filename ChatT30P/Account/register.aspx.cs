@@ -10,6 +10,7 @@ namespace Account
     using System.Web.Security;
     using System.Web.UI.WebControls;
     using System.Linq;
+    using System.Text.RegularExpressions;
 
     using Page = System.Web.UI.Page;
     using System.Web.UI.HtmlControls;
@@ -73,6 +74,13 @@ namespace Account
         /// <param name="e">The <see cref="System.Web.UI.WebControls.LoginCancelEventArgs"/> instance containing the event data.</param>
         protected void RegisterUser_CreatingUser(object sender, LoginCancelEventArgs e)
         {
+            if (!Regex.IsMatch(this.RegisterUser.UserName ?? string.Empty, "^[A-Za-zА-Яа-яЁё0-9._-]{3,64}$"))
+            {
+                e.Cancel = true;
+                this.Master.SetStatus("warning", "Имя пользователя может содержать только буквы (латиница/кириллица), цифры и символы . _ - (длина 3–64).");
+                return;
+            }
+
             if (Membership.GetUser(this.RegisterUser.UserName) != null)
             {
                 e.Cancel = true;

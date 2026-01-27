@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Web.Optimization;
 
 /// <summary>
@@ -33,6 +33,8 @@ public class BundleConfig
             .Include("~/app.min.js")
             .Include("~/controllers/common.js")
             .Include("~/controllers/chataccounts.js")
+            .Include("~/controllers/chats.js")
+            .Include("~/controllers/users.js")
             .Include("~/scripts/bootstrap.js")
             .Include("~/scripts/moment.js")
             .Include("~/scripts/angular.rangeSlider.js")

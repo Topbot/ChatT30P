@@ -1,0 +1,18 @@
+﻿<div id="wrap">
+    <div data-ng-include="" src="'views/shared/_nav.html'"></div>
+
+    <div class="container admin-views-main" data-ng-controller="ChatsController">
+        <div class="page-header clearfix">
+            <h2 class="page-title pull-left">Чаты</h2>
+        </div>
+
+        <div class="alert alert-warning" data-ng-if="!isPaid">
+            Для доступа к разделу требуется оплата.
+        </div>
+        <div data-ng-if="isPaid">
+            <div class="alert alert-info">Раздел в разработке.</div>
+        </div>
+    </div>
+</div>
+
+<div id="footer" data-ng-include src="'views/shared/_footer.html?v=2'"></div>

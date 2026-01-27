@@ -3,6 +3,14 @@
         if (viewLocation == '/' && $location.path() == '/vkusers') return true;
         return viewLocation === $location.path() || $location.path().startsWith(viewLocation + "/");
     };
+    if (window.UserVars && window.UserVars.IsAuthenticated === false) {
+        try {
+            if ((document.cookie || '').indexOf('.ASPXAUTH=') >= 0) {
+                window.UserVars.IsAuthenticated = true;
+            }
+        } catch (e) {
+        }
+    }
     $scope.UserVars = UserVars;
 }]);
 

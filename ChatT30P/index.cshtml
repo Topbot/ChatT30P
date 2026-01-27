@@ -16,9 +16,9 @@
     @Styles.Render("~/css")
     <script type="text/javascript">
     var UserVars = {
-        Name: '@Security.CurrentUser.Identity.Name',
-        IsAuthenticated: @Security.IsAuthenticated.ToString().ToLower(),
-        IsAdmin: @Security.IsAuthenticated.ToString().ToLower(),
+        Name: '@(Request.IsAuthenticated ? (Security.CurrentUser.Identity.Name ?? "") : "")',
+        IsAuthenticated: @Request.IsAuthenticated.ToString().ToLower(),
+        IsAdmin: @Security.IsAdmin.ToString().ToLower(),
         IsPaid: @Security.IsPaid.ToString().ToLower()
     };
     var ServerTime = '@DateTime.Now'
@@ -30,7 +30,7 @@
     }
     </script>
 </head>
-<body>
+<body data-ng-app="stats" data-ng-controller="ChatAccountsController">
     <script type="text/javascript" src="admin.res.axd"></script>
     <div id="modal-log-file" class="modal fade">
         <div class="modal-dialog">
@@ -54,6 +54,25 @@
                     <button onclick="document.location.href = '/Account/register.aspx';" class="btn btn-success"><i class="fa fa-plus-square"></i>Зарегистрироваться</button>
                 </div>
             </div>
+		</div>
+	</div>
+
+    <div id="modal-no-permission" class="modal fade">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <button type="button" class="close" data-dismiss="modal" aria-hidden="true"><i class="fa fa-ban"></i></button>
+                    <h4 class="modal-title">Недостаточно прав</h4>
+                </div>
+                <div class="modal-body">
+                    У вас нет прав для доступа к этому разделу.
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-default" data-dismiss="modal">Закрыть</button>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <div id="modal-wait" class="modal fade" data-backdrop="static" data-keyboard="false">
         <div class="modal-dialog modal-sm" style="margin-top: 15%;">
@@ -80,15 +99,31 @@
                     Вам скоро придёт код. Пожалуйста, введите его в поле для залогинивания аккаунта.
                     <br />
                     <br />
-                    <input type="text" class="form-control" placeholder="Код" data-ng-model="loginCode" />
+                    <div style="text-align:center; margin-bottom:10px;" data-ng-if="qrLoading && !qrCodeUrl">
+                        <i class="fa fa-spinner fa-spin" style="font-size:24px;"></i>
+                    </div>
+
+                    <div style="text-align:center; margin-bottom:10px;" data-ng-if="qrCodeUrl">
+                        <img data-ng-src="{{qrCodeUrl}}" style="width:300px;height:300px;object-fit:contain;" alt="QR" />
+                    </div>
+                    <div class="text-muted" style="margin-bottom:10px;">
+                        Окно закроется через: <strong id="login-timer-text" data-ng-bind="loginTimerText"></strong>
+                    </div>
+                    <input type="text"
+                           class="form-control"
+                           placeholder="Код (6 цифр)"
+                           inputmode="numeric"
+                           pattern="\d*"
+                           maxlength="6"
+                           autocomplete="one-time-code"
+                           data-ng-model="loginCode"
+                           data-ng-change="onLoginCodeChange()" />
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-default" data-dismiss="modal">Закрыть</button>
                     <button type="button" class="btn btn-primary" data-ng-click="submitLoginCode()">Отправить</button>
                 </div>
             </div>
-        </div>
-    </div>
         </div>
     </div>
     <div id="modal-no-subscription" class="modal fade">
@@ -111,7 +146,7 @@
         </div>
     </div>
     <div id="container" class="app-wrapper ltr">
-        <div data-ng-app="stats" data-ng-view="" id="ng-view"></div>
+        <div data-ng-view="" id="ng-view"></div>
     </div>
 
     @Scripts.Render("~/js")
