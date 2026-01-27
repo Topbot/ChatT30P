@@ -11,6 +11,7 @@ using System.Net;
 using System.IO;
 using System.Web;
 using System.Web.Http;
+using System.Linq;
 using ChatT30P.Controllers.Models;
 using Core;
 using Newtonsoft.Json;
@@ -294,15 +295,9 @@ WHERE user_id = @user_id AND platform = @platform AND phone = @phone AND ads_pow
             if (string.IsNullOrWhiteSpace(adsPowerId))
                 return Request.CreateErrorResponse(HttpStatusCode.InternalServerError, "На сервере случилась критическая ошибка, обратитесь к администратору.");
 
-            if (string.IsNullOrWhiteSpace(AdsPowerBaseUrl) || string.IsNullOrWhiteSpace(AdsPowerToken))
-            {
-                LogAdsPowerError("AdsPower StartLogin cannot open profile: AdsPower is not configured.");
-                return Request.CreateErrorResponse(HttpStatusCode.InternalServerError, "На сервере случилась критическая ошибка, обратитесь к администратору.");
-            }
-
-            var openOk = await OpenAdsPowerProfileWithRpaAsync(adsPowerId, "StartLoginTelegram", request.Phone);
-            if (!openOk)
-                return Request.CreateErrorResponse(HttpStatusCode.InternalServerError, "На сервере случилась критическая ошибка, обратитесь к администратору.");
+            // Instead of calling AdsPower RPA directly, enqueue task into DB.
+            EnsureRpaTasksTable();
+            EnqueueRpaTask(adsPowerId, "StartLoginTelegram");
 
                 return Request.CreateResponse(HttpStatusCode.OK, new { adsPowerId });
             }
@@ -313,67 +308,59 @@ WHERE user_id = @user_id AND platform = @platform AND phone = @phone AND ads_pow
             }
         }
 
-        private async Task<bool> OpenAdsPowerProfileWithRpaAsync(string adsPowerId, string rpaScriptName, string phone)
+        private void EnsureRpaTasksTable()
         {
+            if (string.IsNullOrWhiteSpace(ConnectionString)) return;
             try
             {
-                using (var http = new HttpClient())
+                using (var cn = new SqlConnection(ConnectionString))
+                using (var cmd = cn.CreateCommand())
                 {
-                    http.Timeout = TimeSpan.FromSeconds(30);
-
-                    // AdsPower API versions vary:
-                    // - /api/v1/browser/start
-                    // - /api/v1/user/start
-                    var body = new
-                    {
-                        user_id = adsPowerId,
-                        open_tabs = 1,
-                        launch_args = new[] { "--phone=" + (phone ?? string.Empty) },
-                        rpa = new
-                        {
-                            script_name = rpaScriptName,
-                            args = new { phone = phone }
-                        }
-                    };
-
-                    async Task<(HttpResponseMessage Resp, string Json)> PostStartAsync(string path)
-                    {
-                        var url = $"{AdsPowerBaseUrl.TrimEnd('/')}{path}?token={Uri.EscapeDataString(AdsPowerToken)}";
-                        var content = new StringContent(JsonConvert.SerializeObject(body), Encoding.UTF8, "application/json");
-                        var startResp = await http.PostAsync(url, content);
-                        var startJson = await startResp.Content.ReadAsStringAsync();
-                        return (startResp, startJson);
-                    }
-
-                    // Prefer POST variant for RPA запуск (GET обычно просто открывает профиль без RPA)
-                    var r1 = await PostStartAsync("/api/v1/browser/start");
-                    var resp = r1.Resp;
-                    var json = r1.Json;
-
-                    if (resp.StatusCode == HttpStatusCode.NotFound)
-                    {
-                        var r2 = await PostStartAsync("/api/v1/user/start");
-                        resp = r2.Resp;
-                        json = r2.Json;
-                    }
-
-                    if (!resp.IsSuccessStatusCode)
-                    {
-                        LogAdsPowerError($"AdsPower profile start failed. Status={(int)resp.StatusCode}. Body={json}. BaseUrl={AdsPowerBaseUrl}");
-                        return false;
-                    }
-
-                    dynamic obj = null;
-                    try { obj = JsonConvert.DeserializeObject(json); }
-                    catch (Exception ex) { LogAdsPowerError($"AdsPower profile start JSON parse failed. Body={json}", ex); }
-
-                    return obj != null && obj.code == 0;
+                    cmd.CommandText = @"
+IF OBJECT_ID('dbo.rpa_tasks', 'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.rpa_tasks(
+        id INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        ads_power_id NVARCHAR(128) NOT NULL,
+        script_name NVARCHAR(128) NOT NULL,
+        created DATETIME NOT NULL DEFAULT(GETDATE())
+    );
+    CREATE INDEX IX_rpa_tasks_ads_power_id ON dbo.rpa_tasks(ads_power_id);
+END";
+                    cn.Open();
+                    cmd.ExecuteNonQuery();
                 }
             }
             catch (Exception ex)
             {
-                LogAdsPowerError("AdsPower profile start failed with exception.", ex);
-                return false;
+                LogAdsPowerError("EnsureRpaTasksTable failed.", ex);
+            }
+        }
+
+        private void EnqueueRpaTask(string adsPowerId, string scriptName)
+        {
+            if (string.IsNullOrWhiteSpace(ConnectionString)) return;
+            if (string.IsNullOrWhiteSpace(adsPowerId) || string.IsNullOrWhiteSpace(scriptName)) return;
+
+            try
+            {
+                using (var cn = new SqlConnection(ConnectionString))
+                using (var cmd = cn.CreateCommand())
+                {
+                    cmd.CommandText = @"
+INSERT INTO dbo.rpa_tasks(ads_power_id, script_name)
+VALUES(@ads_power_id, @script_name)";
+
+                    cmd.Parameters.Add("@ads_power_id", SqlDbType.NVarChar, 128).Value = adsPowerId;
+                    cmd.Parameters.Add("@script_name", SqlDbType.NVarChar, 128).Value = scriptName;
+
+                    cn.Open();
+                    cmd.ExecuteNonQuery();
+                }
+            }
+            catch (Exception ex)
+            {
+                LogAdsPowerError($"EnqueueRpaTask failed. adsPowerId={adsPowerId} script={scriptName}", ex);
             }
         }
 
@@ -487,6 +474,7 @@ WHERE user_id = @user_id AND platform = @platform AND phone = @phone AND ads_pow
             var url = $"{AdsPowerBaseUrl.TrimEnd('/')}/api/v1/user/create?token={Uri.EscapeDataString(AdsPowerToken)}";
 
             var platform = (item?.Platform ?? string.Empty).Trim();
+            var phoneDigits = new string(((item?.Phone ?? string.Empty).Trim()).Where(char.IsDigit).ToArray());
             string domainName;
             if (platform.Equals("Telegram", StringComparison.OrdinalIgnoreCase))
             {
@@ -508,6 +496,7 @@ WHERE user_id = @user_id AND platform = @platform AND phone = @phone AND ads_pow
             var body = new
             {
                 name = $"{item.Platform}-{item.Phone}",
+                username = phoneDigits,
                 group_id = groupId,
                 domain_name = domainName,
                 proxyid = AdsPowerProxyId,
