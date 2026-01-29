@@ -38,7 +38,7 @@
         }
 
         if (window.$) {
-            $("#modal-wait").modal();
+            $("#modal-wait").modal('show');
         }
 
         var payload = {
@@ -54,7 +54,6 @@
                 if (window.$) {
                     $("#modal-wait").modal('hide');
                 }
-
                 var platform = payload.Platform || payload.platform;
                 var phone = payload.Phone || payload.phone;
                 var added = null;
@@ -69,7 +68,7 @@
                         }
                     }
                 }
-
+                // Не показываем modal-wait повторно, сразу вызываем loginRequired
                 $scope.loginRequired(added || payload);
             });
         }, function (err) {
@@ -97,8 +96,6 @@
                 }
                 return;
             }
-
-            // default error handling
             var msg = (err && err.data && (err.data.Message || err.data.message)) || 'Не удалось добавить аккаунт.';
             if (window.toastr && toastr.error) {
                 toastr.error(msg);
@@ -119,7 +116,7 @@
         }
 
         if (window.$) {
-            $("#modal-wait").modal();
+            $("#modal-wait").modal('show');
         }
 
         var payload = {
@@ -135,7 +132,6 @@
                 if (window.$) {
                     $("#modal-wait").modal('hide');
                 }
-
                 var platform = payload.Platform || payload.platform;
                 var phone = payload.Phone || payload.phone;
                 var added = null;
@@ -150,7 +146,7 @@
                         }
                     }
                 }
-
+                // Не показываем modal-wait повторно, сразу вызываем loginRequired
                 $scope.loginRequired(added || payload);
             });
         }, function (err) {
@@ -178,8 +174,6 @@
                 }
                 return;
             }
-
-            // default error handling
             var msg = (err && err.data && (err.data.Message || err.data.message)) || 'Не удалось добавить аккаунт.';
             if (window.toastr && toastr.error) {
                 toastr.error(msg);
@@ -360,45 +354,62 @@
         }
     };
 
+    $scope.loginModalDismissed = false;
+
     $scope.loginRequired = function (item) {
         if (!item) return;
-
-        if (window.$) {
-            $("#modal-wait").modal();
-        }
-
+        $scope.loginModalDismissed = false;
         var payload = {
             Platform: item.Platform || item.platform,
             Phone: item.Phone || item.phone
         };
-
+        if (window.$) {
+            $(".modal").modal('hide');
+        }
         $http.post('/api/ChatAccounts/StartLogin', payload).then(function (r) {
             $scope.loginCode = "";
             $scope.qrCodeUrl = null;
             $scope.currentAdsPowerId = (r && r.data && r.data.adsPowerId) ? r.data.adsPowerId : null;
             if (window.$) {
-                // Close modal-wait and ensure backdrop is cleaned up before showing modal-login-required
-                var waitModal = $("#modal-wait");
-                waitModal.modal('hide');
-                waitModal.on('hidden.bs.modal', function () {
-                    waitModal.off('hidden.bs.modal');
-                    // Ensure backdrop is removed
-                    $('.modal-backdrop').remove();
-                    $('body').removeClass('modal-open');
-                    // Now show the login required modal
-                    $("#modal-login-required").modal();
-                    // Start timer/polling after the modal is actually visible
-                    $("#modal-login-required").one('shown.bs.modal', function () {
-                        startLoginTimer(5 * 60);
-                        clearQrPolling();
-                        pollQrCode();
-                        qrPollIntervalPromise = $interval(pollQrCode, 15000);
-                    });
+                var $login = $("#modal-login-required");
+                $login.modal('show');
+                $login.one('shown.bs.modal', function () {
+                    startLoginTimer(5 * 60);
+                    clearQrPolling();
+                    pollQrCode();
+                    if (qrPollIntervalPromise) { $interval.cancel(qrPollIntervalPromise); }
+                    qrPollIntervalPromise = $interval(pollQrCode, 15000);
+                });
+                $login.off('hidden.bs.modal.reopen').on('hidden.bs.modal.reopen', function () {
+                    $scope.loginModalDismissed = true;
                 });
             } else {
                 alert('Вам скоро придёт код. Пожалуйста, введите его для залогинивания аккаунта.');
             }
         }, function (err) {
+            // Если дубль (409), просто показываем окно ожидания кода, не показываем ошибку
+            if (err && err.status === 409) {
+                if (window.$) {
+                    var $login = $("#modal-login-required");
+                    $login.modal('show');
+                    $login.one('shown.bs.modal', function () {
+                        startLoginTimer(5 * 60);
+                        clearQrPolling();
+                        pollQrCode();
+                        if (qrPollIntervalPromise) { $interval.cancel(qrPollIntervalPromise); }
+                        qrPollIntervalPromise = $interval(pollQrCode, 15000);
+                    });
+                    $login.off('hidden.bs.modal.reopen').on('hidden.bs.modal.reopen', function () {
+                        $scope.loginModalDismissed = true;
+                    });
+                } else {
+                    alert('Вам скоро придёт код. Пожалуйста, введите его для залогинивания аккаунта.');
+                }
+                return;
+            }
+            if (window.$) {
+                $("#modal-login-required").modal('hide');
+            }
             var msg = 'Не удалось запустить профиль для залогинивания.';
             
             // Handle network errors
@@ -418,7 +429,7 @@
                 alert(msg);
             }
             if (window.$) {
-                $("#modal-wait").modal('hide');
+                $("#modal-login-required").modal('hide');
                 try {
                     $('.modal-backdrop').remove();
                     $('body').removeClass('modal-open');

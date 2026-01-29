@@ -34,26 +34,32 @@ namespace ChatT30P.Controllers.Api
         {
             try
             {
-                if (!EventLog.SourceExists(EventLogSource))
-                    EventLog.CreateEventSource(EventLogSource, "Application");
-
+                var baseDir = HttpContext.Current?.Server?.MapPath("~/App_Data/logs") ?? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "App_Data", "logs");
+                Directory.CreateDirectory(baseDir);
+                var path = Path.Combine(baseDir, "chataccounts-errors.log");
                 var text = ex == null ? message : (message + Environment.NewLine + ex);
-                EventLog.WriteEntry(EventLogSource, text, EventLogEntryType.Error);
+                File.AppendAllText(path, DateTime.UtcNow.ToString("o") + " " + text + Environment.NewLine + Environment.NewLine, Encoding.UTF8);
             }
             catch
             {
-                try
-                {
-                    var baseDir = HttpContext.Current?.Server?.MapPath("~/App_Data/logs") ?? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "App_Data", "logs");
-                    Directory.CreateDirectory(baseDir);
-                    var path = Path.Combine(baseDir, "chataccounts-errors.log");
-                    var text = ex == null ? message : (message + Environment.NewLine + ex);
-                    File.AppendAllText(path, DateTime.UtcNow.ToString("o") + " " + text + Environment.NewLine + Environment.NewLine, Encoding.UTF8);
-                }
-                catch
-                {
-                    // ignore logging failures
-                }
+                // ignore logging failures
+            }
+        }
+
+        // Write AdsPower-related messages to file logs only (avoid Windows Event Log)
+        private static void LogAdsPowerToFile(string message, Exception ex = null)
+        {
+            try
+            {
+                var baseDir = HttpContext.Current?.Server?.MapPath("~/App_Data/logs") ?? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "App_Data", "logs");
+                Directory.CreateDirectory(baseDir);
+                var path = Path.Combine(baseDir, "chataccounts-errors.log");
+                var text = ex == null ? message : (message + Environment.NewLine + ex);
+                File.AppendAllText(path, DateTime.UtcNow.ToString("o") + " " + text + Environment.NewLine + Environment.NewLine, Encoding.UTF8);
+            }
+            catch
+            {
+                // ignore logging failures
             }
         }
 
@@ -314,7 +320,6 @@ WHERE user_id = @user_id AND platform = @platform AND phone = @phone AND ads_pow
                 LogAdsPowerError($"Updated account with adsPowerId={adsPowerId}");
             }
 
-
             // Open AdsPower profile and run RPA script
             if (string.IsNullOrWhiteSpace(adsPowerId))
                 return Request.CreateErrorResponse(HttpStatusCode.InternalServerError, "На сервере случилась критическая ошибка, обратитесь к администратору.");
@@ -345,6 +350,28 @@ WHERE user_id = @user_id AND platform = @platform AND phone = @phone AND ads_pow
                 if (!string.IsNullOrWhiteSpace(puppeteerUrl))
                 {
                     LogAdsPowerError($"StartLogin: OpenAdsPowerHeadlessAsync returned puppeteer URL: {puppeteerUrl}");
+                    // Явно записываем puppeteerUrl в rpa_tasks
+                    try
+                    {
+                        using (var cn = new SqlConnection(ConnectionString))
+                        using (var cmd = cn.CreateCommand())
+                        {
+                            cmd.CommandText = @"
+INSERT INTO dbo.rpa_tasks(ads_power_id, script_name, puppeteer)
+VALUES(@ads_power_id, @script_name, @puppeteer)";
+                            cmd.Parameters.Add("@ads_power_id", SqlDbType.NVarChar, 128).Value = adsPowerId;
+                            cmd.Parameters.Add("@script_name", SqlDbType.NVarChar, 128).Value = script;
+                            cmd.Parameters.Add("@puppeteer", SqlDbType.NVarChar, 2048).Value = puppeteerUrl;
+                            cn.Open();
+                            cmd.ExecuteNonQuery();
+                        }
+                    }
+                    catch (SqlException ex) when (ex.Number == 2601 || ex.Number == 2627)
+                    {
+                        // Unique constraint violation (duplicate key)
+                        LogAdsPowerError($"RPA task insert duplicate for adsPowerId={adsPowerId}, script={script}", ex);
+                        return Request.CreateErrorResponse(HttpStatusCode.Conflict, "RPA задача для этого профиля уже существует.");
+                    }
                 }
                 else
                 {
@@ -471,72 +498,106 @@ VALUES(@ads_power_id, @script_name, @puppeteer)";
                 return null;
             }
 
-            // Attempt to open browser/profile via AdsPower v2 API in headless mode and return puppeteer/remote debugging URL
-            var url = $"{AdsPowerBaseUrl.TrimEnd('/')}/api/v2/browser/start?token={Uri.EscapeDataString(AdsPowerToken)}";
-            LogAdsPowerError($"OpenAdsPowerHeadlessAsync: Attempting to connect to {url}");
-            
-            var body = new
-            {
-                profile_id = adsPowerId
-            };
+            var baseUrl = AdsPowerBaseUrl.TrimEnd('/');
+            // Исправлено: добавляем profile_id в GET-запрос
+            var activeUrl = baseUrl + "/api/v2/browser-profile/active?token=" + Uri.EscapeDataString(AdsPowerToken) + "&profile_id=" + Uri.EscapeDataString(adsPowerId);
+            var startUrl = baseUrl + "/api/v2/browser-profile/start?token=" + Uri.EscapeDataString(AdsPowerToken);
+            var reqBody = new { profile_id = adsPowerId, headless = true };
 
             using (var http = new HttpClient())
             {
+                http.Timeout = TimeSpan.FromSeconds(25);
+                // 1. Check active profiles first
                 try
                 {
-                    http.Timeout = TimeSpan.FromSeconds(25);
-                    var content = new StringContent(JsonConvert.SerializeObject(body), Encoding.UTF8, "application/json");
-                    LogAdsPowerError($"OpenAdsPowerHeadlessAsync: Sending request with body: {JsonConvert.SerializeObject(body)}");
-                    
-                    var resp = await http.PostAsync(url, content);
-                    var json = await resp.Content.ReadAsStringAsync();
+                    LogAdsPowerToFile($"OpenAdsPowerHeadlessAsync: Checking active profiles {activeUrl}");
+                    var activeResp = await http.GetAsync(activeUrl);
+                    var activeJson = await activeResp.Content.ReadAsStringAsync();
+                    LogAdsPowerToFile($"OpenAdsPowerHeadlessAsync: Active profiles response from {activeUrl}. Status={(int)activeResp.StatusCode}, Body={activeJson}");
+                    if (activeResp.IsSuccessStatusCode)
+                    {
+                        dynamic activeObj = null;
+                        try { activeObj = JsonConvert.DeserializeObject(activeJson); } catch { }
+                        if (activeObj != null && activeObj.code == 0 && activeObj.data != null && activeObj.data.list != null)
+                        {
+                            foreach (var prof in activeObj.data.list)
+                            {
+                                string pid = null;
+                                try { pid = (string)prof.profile_id; } catch { }
+                                if (pid == adsPowerId)
+                                {
+                                    string found = null;
+                                    try { if (prof.puppeteer_url != null) found = (string)prof.puppeteer_url; } catch { }
+                                    try { if (found == null && prof.ws_url != null) found = (string)prof.ws_url; } catch { }
+                                    try { if (found == null && prof.debugger_url != null) found = (string)prof.debugger_url; } catch { }
+                                    try { if (found == null && prof.url != null) found = (string)prof.url; } catch { }
+                                    try { if (found == null && prof.ws != null && prof.ws.puppeteer != null) found = (string)prof.ws.puppeteer; } catch { }
+                                    if (!string.IsNullOrWhiteSpace(found))
+                                    {
+                                        LogAdsPowerToFile($"OpenAdsPowerHeadlessAsync: Profile already open, using ws: {found}");
+                                        return found;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LogAdsPowerToFile($"OpenAdsPowerHeadlessAsync: Exception during active profiles check: {ex.Message}");
+                }
+                // 2. If not open, start profile
+                try
+                {
+                    var content = new StringContent(JsonConvert.SerializeObject(reqBody), Encoding.UTF8, "application/json");
+                    LogAdsPowerToFile($"OpenAdsPowerHeadlessAsync: Attempting to connect to {startUrl} with body: {JsonConvert.SerializeObject(reqBody)}");
 
-                    LogAdsPowerError($"OpenAdsPowerHeadlessAsync: Received response. Status={(int)resp.StatusCode}, Body={json}");
+                    var resp = await http.PostAsync(startUrl, content);
+                    var json = await resp.Content.ReadAsStringAsync();
+                    LogAdsPowerToFile($"OpenAdsPowerHeadlessAsync: Received response from {startUrl}. Status={(int)resp.StatusCode}, Body={json}");
 
                     if (!resp.IsSuccessStatusCode)
                     {
-                        LogAdsPowerError($"AdsPower browser start failed. Status={(int)resp.StatusCode}. Body={json}");
+                        LogAdsPowerToFile($"AdsPower browser start failed for {startUrl}. Status={(int)resp.StatusCode}. Body={json}");
                         return null;
                     }
 
                     dynamic obj = null;
                     try { obj = JsonConvert.DeserializeObject(json); }
-                    catch (Exception ex) { LogAdsPowerError($"AdsPower browser start JSON parse failed. Body={json}", ex); }
+                    catch (Exception ex) { LogAdsPowerToFile($"AdsPower browser start JSON parse failed. Body={json}"); }
 
                     if (obj == null || obj.code != 0 || obj.data == null)
                     {
-                        LogAdsPowerError($"AdsPower browser start returned unexpected response. Body={json}");
+                        LogAdsPowerToFile($"AdsPower browser start returned unexpected response. Body={json}");
                         return null;
                     }
 
-                    // try common fields for puppeteer/debug URL
+                    // try common fields for puppeteer/debug URL, including nested ws.puppeteer
                     string found = null;
                     try { if (obj.data.puppeteer_url != null) found = (string)obj.data.puppeteer_url; } catch { }
                     try { if (found == null && obj.data.ws_url != null) found = (string)obj.data.ws_url; } catch { }
                     try { if (found == null && obj.data.debugger_url != null) found = (string)obj.data.debugger_url; } catch { }
                     try { if (found == null && obj.data.url != null) found = (string)obj.data.url; } catch { }
-
+                    try { if (found == null && obj.data.ws != null && obj.data.ws.puppeteer != null) found = (string)obj.data.ws.puppeteer; } catch { }
                     if (string.IsNullOrWhiteSpace(found))
                     {
-                        // log whole response to Windows Event Log for debugging
-                        LogAdsPowerError($"AdsPower headless start succeeded but no puppeteer URL found. Body={json}");
+                        LogAdsPowerToFile($"AdsPower headless start succeeded but no puppeteer URL found. Body={json}");
                     }
-
                     return found;
                 }
                 catch (HttpRequestException ex)
                 {
-                    LogAdsPowerError($"AdsPower connection error. URL={url}. Message={ex.Message}", ex);
+                    LogAdsPowerToFile($"AdsPower connection error for start. Message={ex.Message}");
                     return null;
                 }
                 catch (TaskCanceledException ex)
                 {
-                    LogAdsPowerError($"AdsPower request timeout. URL={url}", ex);
+                    LogAdsPowerToFile($"AdsPower request timeout for start");
                     return null;
                 }
                 catch (Exception ex)
                 {
-                    LogAdsPowerError("AdsPower browser start failed with exception.", ex);
+                    LogAdsPowerToFile($"AdsPower browser start failed with exception for start: {ex.Message}");
                     return null;
                 }
             }
@@ -676,6 +737,8 @@ VALUES(@ads_power_id, @script_name, @puppeteer)";
                 name = $"{item.Platform}-{item.Phone}",
                 group_id = groupId,
                 platform = platformDomain,
+                username = item.Phone, // <--- добавить это поле
+                platform_name = item.Platform, // <--- добавить это поле для явного указания платформы
                 // Prefer direct connection.
                 user_proxy_config = new
                 {
@@ -825,37 +888,106 @@ WHERE user_id = @user_id AND platform = @platform AND phone = @phone";
 
             try
             {
-                // AdsPower API common endpoint: /api/v1/user/delete?token=... (POST)
-                var url = $"{AdsPowerBaseUrl.TrimEnd('/')}/api/v1/user/delete?token={Uri.EscapeDataString(AdsPowerToken)}";
-                var body = new { user_ids = new[] { adsPowerId } };
-
+                // Only v2 API for delete/stop
+                var deleteUrl = $"{AdsPowerBaseUrl.TrimEnd('/')}/api/v1/user/delete?token={Uri.EscapeDataString(AdsPowerToken)}";
+                var deleteBody = new { user_ids = new[] { adsPowerId } };
                 using (var http = new HttpClient())
                 {
                     http.Timeout = TimeSpan.FromSeconds(15);
+                    var content = new StringContent(JsonConvert.SerializeObject(deleteBody), Encoding.UTF8, "application/json");
+                    var resp = http.PostAsync(deleteUrl, content).GetAwaiter().GetResult();
+                    var json = resp.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+
+                    if (resp.IsSuccessStatusCode)
+                    {
+                        dynamic obj = null;
+                        try { obj = JsonConvert.DeserializeObject(json); } catch { }
+                        if (obj != null && obj.code == 0)
+                        {
+                            LogAdsPowerToFile($"AdsPower profile delete succeeded. adsPowerId={adsPowerId}");
+                            return;
+                        }
+                        LogAdsPowerToFile($"AdsPower profile delete returned unexpected response. Body={json}");
+                    }
+                    else
+                    {
+                        LogAdsPowerToFile($"AdsPower profile delete failed. Status={(int)resp.StatusCode}. Body={json}");
+                    }
+                }
+
+                // If delete didn't succeed, try to stop the browser/profile (V2 only) and retry delete
+                LogAdsPowerToFile($"AdsPower profile delete: attempting to stop profile then retry delete. adsPowerId={adsPowerId}");
+                try
+                {
+                    var closed = TryCloseAdsPowerProfileV2(adsPowerId);
+                    LogAdsPowerToFile($"TryCloseAdsPowerProfileV2 result: {closed}");
+                    if (closed)
+                    {
+                        System.Threading.Thread.Sleep(4000); // Ждём 4 секунды после закрытия профиля
+                    }
+                    // Retry delete
+                    using (var http2 = new HttpClient())
+                    {
+                        http2.Timeout = TimeSpan.FromSeconds(15);
+                        var content2 = new StringContent(JsonConvert.SerializeObject(deleteBody), Encoding.UTF8, "application/json");
+                        var resp2 = http2.PostAsync(deleteUrl, content2).GetAwaiter().GetResult();
+                        var json2 = resp2.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+                        if (resp2.IsSuccessStatusCode)
+                        {
+                            dynamic obj2 = null;
+                            try { obj2 = JsonConvert.DeserializeObject(json2); } catch { }
+                            if (obj2 != null && obj2.code == 0)
+                            {
+                                LogAdsPowerToFile($"AdsPower profile delete after stop succeeded. adsPowerId={adsPowerId}");
+                                return;
+                            }
+                            LogAdsPowerToFile($"AdsPower profile delete after stop returned unexpected response. Body={json2}");
+                        }
+                        else
+                        {
+                            LogAdsPowerToFile($"AdsPower profile delete after stop failed. Status={(int)resp2.StatusCode}. Body={json2}");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LogAdsPowerToFile($"Error while attempting to stop profile before delete: {ex.Message}");
+                }
+            }
+            catch (Exception ex)
+            {
+                LogAdsPowerToFile($"AdsPower profile delete failed with exception: {ex.Message}");
+            }
+        }
+
+        private bool TryCloseAdsPowerProfileV2(string adsPowerId)
+        {
+            if (string.IsNullOrWhiteSpace(AdsPowerBaseUrl) || string.IsNullOrWhiteSpace(AdsPowerToken)) return false;
+            try
+            {
+                var url = AdsPowerBaseUrl.TrimEnd('/') + "/api/v2/browser-profile/stop?token=" + Uri.EscapeDataString(AdsPowerToken);
+                var body = new { profile_id = adsPowerId };
+                using (var http = new HttpClient())
+                {
+                    http.Timeout = TimeSpan.FromSeconds(10);
                     var content = new StringContent(JsonConvert.SerializeObject(body), Encoding.UTF8, "application/json");
                     var resp = http.PostAsync(url, content).GetAwaiter().GetResult();
                     var json = resp.Content.ReadAsStringAsync().GetAwaiter().GetResult();
-
-                    if (!resp.IsSuccessStatusCode)
-                    {
-                        LogAdsPowerError($"AdsPower profile delete failed. Status={(int)resp.StatusCode}. Body={json}");
-                        return;
-                    }
-
+                    LogAdsPowerToFile($"TryCloseAdsPowerProfileV2: called {url}. Status={(int)resp.StatusCode}, Body={json}");
+                    if (!resp.IsSuccessStatusCode) return false;
                     dynamic obj = null;
-                    try { obj = JsonConvert.DeserializeObject(json); }
-                    catch (Exception ex) { LogAdsPowerError($"AdsPower profile delete JSON parse failed. Body={json}", ex); }
-
-                    if (obj == null || obj.code != 0)
+                    try { obj = JsonConvert.DeserializeObject(json); } catch { }
+                    if (obj != null && obj.code == 0)
                     {
-                        LogAdsPowerError($"AdsPower profile delete returned unexpected response. Body={json}");
+                        return true;
                     }
                 }
             }
             catch (Exception ex)
             {
-                LogAdsPowerError("AdsPower profile delete failed with exception.", ex);
+                LogAdsPowerToFile($"TryCloseAdsPowerProfileV2: exception: {ex.Message}");
             }
+            return false;
         }
     }
 }

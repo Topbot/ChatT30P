@@ -96,41 +96,9 @@ namespace ChatService
 
             if (count <= 0)
             {
-                WriteInfo("No pending tasks; skipping AdsPower focus.");
+                WriteInfo("No pending tasks; skipping.");
                 WriteInfo("Tick finished");
                 return;
-            }
-
-            // Pre-check: if SunBrowser is open, do not proceed unless queue is too large.
-            var sunBrowserOpen = WindowFocusService.HasOpenSunBrowserWindow();
-            if (sunBrowserOpen)
-            {
-                if (count >= 100)
-                {
-                    WriteError($"Queue is too large: {count}. Closing SunBrowser window...");
-                    var closed = WindowFocusService.CloseSunBrowserWindows();
-                    WriteInfo($"SunBrowser windows close requested: {closed}");
-                    TrySendQueueAlertOncePerDay(count);
-                }
-                else
-                {
-                    WriteInfo($"SunBrowser is open and queue size is {count} (<100). Skipping tick.");
-                    return;
-                }
-            }
-
-            try
-            {
-                WriteInfo("Focusing AdsPower window...");
-                WindowFocusService.FocusAdsPower();
-                WriteInfo("AdsPower focus/maximize/click completed");
-
-                // Best-effort: ensure UIA can see the window
-                AdsPowerAutomation.FocusMainWindow();
-            }
-            catch (Exception ex)
-            {
-                WriteError("Window focus action failed", ex);
             }
 
             var task = TryGetNextTask();
@@ -138,51 +106,56 @@ namespace ChatService
             {
                 try
                 {
-                    WriteInfo($"Filling AdsPower filter with ads_power_id='{task.AdsPowerId}', script_name='{task.ScriptName}', task_id={task.Id}");
-                    // Legacy coordinate-based flow (filter + RPA)
-                    WindowFocusService.SelectProfileIdAndFill(task.AdsPowerId, task.ScriptName);
+                    WriteInfo($"Processing RPA task: ads_power_id='{task.AdsPowerId}', script_name='{task.ScriptName}', task_id={task.Id}");
 
-                    // UIAutomation assist: if RPA dialog is open, try to fill + OK using UIA
-                    try
+                    if (string.Equals(task.ScriptName, "TelegramStartLogin", StringComparison.OrdinalIgnoreCase))
                     {
-                        AdsPowerAutomation.TryFillScriptNameAndOk(task.ScriptName);
-                    }
-                    catch
-                    {
-                    }
-                    WriteInfo("UI automation completed; waiting 1 minute before confirmation...");
-                    Thread.Sleep(TimeSpan.FromMinutes(1));
-
-                    var hasSunBrowser = WindowFocusService.HasOpenSunBrowserWindow();
-                    if (hasSunBrowser)
-                    {
-                        WriteInfo("Detected '* - SunBrowser' window; deleting task from DB...");
-                        var deleted = TryDeleteTask(task.Id);
-                        WriteInfo(deleted
-                            ? $"Task deleted from DB (id={task.Id})"
-                            : $"Task was NOT deleted (id={task.Id})");
-                    }
-                    else
-                    {
-                        WriteInfo("No '* - SunBrowser' window detected after 1 minute; clicking Cancel and skipping DB deletion.");
                         try
                         {
-                            WindowFocusService.ClickRpaDialogCancel();
+                            RunTelegramStartLogin(task.AdsPowerId, task.Value); // userName = Value, accId = AdsPowerId
                         }
                         catch (Exception ex)
                         {
-                            WriteError("Failed to click Cancel in RPA dialog", ex);
+                            WriteError("TelegramStartLogin script failed", ex);
                         }
                     }
+                    else if (string.Equals(task.ScriptName, "WhatsappStartLogin", StringComparison.OrdinalIgnoreCase))
+                    {
+                        try
+                        {
+                            RunWhatsappStartLogin(task.AdsPowerId, task.Value); // userName = Value, accId = AdsPowerId
+                        }
+                        catch (Exception ex)
+                        {
+                            WriteError("WhatsappStartLogin script failed", ex);
+                        }
+                    }
+                    else if (string.Equals(task.ScriptName, "MaxStartLogin", StringComparison.OrdinalIgnoreCase))
+                    {
+                        try
+                        {
+                            RunMaxStartLogin(task.AdsPowerId); // accId = AdsPowerId, no username needed
+                        }
+                        catch (Exception ex)
+                        {
+                            WriteError("MaxStartLogin script failed", ex);
+                        }
+                    }
+                    // Здесь может быть не-UI логика обработки других задач
+
+                    var deleted = TryDeleteTask(task.Id);
+                    WriteInfo(deleted
+                        ? $"Task deleted from DB (id={task.Id})"
+                        : $"Task was NOT deleted (id={task.Id})");
                 }
                 catch (Exception ex)
                 {
-                    WriteError("UI automation failed", ex);
+                    WriteError("Task processing failed", ex);
                 }
             }
             else
             {
-                WriteInfo("No ads_power_id found to fill");
+                WriteInfo("No ads_power_id found to process");
             }
 
             WriteInfo("Tick finished");
@@ -224,6 +197,7 @@ namespace ChatService
             public int Id { get; set; }
             public string AdsPowerId { get; set; }
             public string ScriptName { get; set; }
+            public string Value { get; set; } // параметр для скрипта (телефон или код)
         }
 
         private RpaTask TryGetNextTask()
@@ -234,7 +208,7 @@ namespace ChatService
                 using (var cmd = cn.CreateCommand())
                 {
                     cmd.CommandTimeout = DbCommandTimeoutSeconds;
-                    cmd.CommandText = @"SELECT TOP (1) id, ads_power_id, script_name FROM dbo.rpa_tasks ORDER BY id";
+                    cmd.CommandText = @"SELECT TOP (1) id, ads_power_id, script_name, value FROM dbo.rpa_tasks ORDER BY id";
                     cn.Open();
                     using (var r = cmd.ExecuteReader())
                     {
@@ -245,7 +219,8 @@ namespace ChatService
                         {
                             Id = r[0] == DBNull.Value ? 0 : Convert.ToInt32(r[0]),
                             AdsPowerId = r[1] == DBNull.Value ? null : Convert.ToString(r[1]),
-                            ScriptName = r[2] == DBNull.Value ? null : Convert.ToString(r[2])
+                            ScriptName = r[2] == DBNull.Value ? null : Convert.ToString(r[2]),
+                            Value = r[3] == DBNull.Value ? null : Convert.ToString(r[3])
                         };
                     }
                 }
@@ -304,6 +279,7 @@ BEGIN
         id INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
         ads_power_id NVARCHAR(128) NOT NULL,
         script_name NVARCHAR(128) NOT NULL,
+        value NVARCHAR(128) NULL,
         created DATETIME NOT NULL DEFAULT(GETDATE())
     );
     CREATE INDEX IX_rpa_tasks_ads_power_id ON dbo.rpa_tasks(ads_power_id);
@@ -344,5 +320,102 @@ END";
             {
             }
         }
+
+#if !NO_SELENIUM
+        private void RunTelegramStartLogin(string accId, string userName)
+        {
+            // Requires Selenium.WebDriver, Selenium.WebDriver.ChromeDriver, Selenium.Support
+            var options = new OpenQA.Selenium.Chrome.ChromeOptions();
+            options.AddArgument("--headless");
+            options.AddArgument("--disable-gpu");
+            options.AddArgument("--window-size=1280,1024");
+            using (var driver = new OpenQA.Selenium.Chrome.ChromeDriver(options))
+            {
+                driver.Navigate().GoToUrl("https://web.telegram.org/a/");
+                driver.Manage().Timeouts().ImplicitWait = TimeSpan.FromSeconds(10);
+
+                var wait = new OpenQA.Selenium.Support.UI.WebDriverWait(driver, TimeSpan.FromSeconds(5));
+                wait.Until(OpenQA.Selenium.Support.UI.ExpectedConditions.ElementIsVisible(OpenQA.Selenium.By.CssSelector("div[class=\"qr-container\"] image")));
+
+                var screenshot = ((OpenQA.Selenium.ITakesScreenshot)driver).GetScreenshot();
+                string screenshotPath = $"{accId}.png";
+                screenshot.SaveAsFile(screenshotPath, OpenQA.Selenium.ScreenshotImageFormat.Png);
+
+                var authButton = driver.FindElement(OpenQA.Selenium.By.CssSelector("button[class*=\"auth-button\"]"));
+                authButton.Click();
+
+                wait = new OpenQA.Selenium.Support.UI.WebDriverWait(driver, TimeSpan.FromSeconds(30));
+                wait.Until(OpenQA.Selenium.Support.UI.ExpectedConditions.ElementIsVisible(OpenQA.Selenium.By.CssSelector("input[id=\"sign-in-phone-number\"]")));
+
+                var phoneInput = driver.FindElement(OpenQA.Selenium.By.CssSelector("input[id=\"sign-in-phone-number\"]"));
+                phoneInput.SendKeys(userName);
+
+                System.Threading.Thread.Sleep(100);
+
+                var submitButton = driver.FindElement(OpenQA.Selenium.By.CssSelector("button[type=\"submit\"]"));
+                submitButton.Click();
+
+                System.Threading.Thread.Sleep(240000); // 4 минуты
+            }
+        }
+
+        private void RunWhatsappStartLogin(string accId, string userName)
+        {
+            var options = new OpenQA.Selenium.Chrome.ChromeOptions();
+            options.AddArgument("--headless");
+            options.AddArgument("--disable-gpu");
+            options.AddArgument("--window-size=1280,1024");
+            using (var driver = new OpenQA.Selenium.Chrome.ChromeDriver(options))
+            {
+                driver.Navigate().GoToUrl("https://web.whatsapp.com/");
+                driver.Manage().Timeouts().ImplicitWait = TimeSpan.FromSeconds(10);
+
+                var wait = new OpenQA.Selenium.Support.UI.WebDriverWait(driver, TimeSpan.FromSeconds(5));
+                wait.Until(OpenQA.Selenium.Support.UI.ExpectedConditions.ElementIsVisible(OpenQA.Selenium.By.XPath("//div[text()=\"Log in with phone number\"]")));
+
+                var screenshot = ((OpenQA.Selenium.ITakesScreenshot)driver).GetScreenshot();
+                string screenshotPath = $"{accId}.png";
+                screenshot.SaveAsFile(screenshotPath, OpenQA.Selenium.ScreenshotImageFormat.Png);
+
+                var phoneLoginButton = driver.FindElement(OpenQA.Selenium.By.XPath("//div[text()=\"Log in with phone number\"]"));
+                phoneLoginButton.Click();
+
+                wait = new OpenQA.Selenium.Support.UI.WebDriverWait(driver, TimeSpan.FromSeconds(30));
+                wait.Until(OpenQA.Selenium.Support.UI.ExpectedConditions.ElementIsVisible(OpenQA.Selenium.By.CssSelector("input[aria-label]")));
+
+                var phoneInput = driver.FindElement(OpenQA.Selenium.By.CssSelector("input[aria-label]"));
+                phoneInput.SendKeys("+" + userName);
+
+                System.Threading.Thread.Sleep(100);
+
+                var nextButton = driver.FindElement(OpenQA.Selenium.By.XPath("//div[text()=\"Next\"]"));
+                nextButton.Click();
+
+                System.Threading.Thread.Sleep(240000); // 4 минуты
+            }
+        }
+
+        private void RunMaxStartLogin(string accId)
+        {
+            var options = new OpenQA.Selenium.Chrome.ChromeOptions();
+            options.AddArgument("--headless");
+            options.AddArgument("--disable-gpu");
+            options.AddArgument("--window-size=1280,1024");
+            using (var driver = new OpenQA.Selenium.Chrome.ChromeDriver(options))
+            {
+                driver.Navigate().GoToUrl("https://web.whatsapp.com/");
+                driver.Manage().Timeouts().ImplicitWait = TimeSpan.FromSeconds(10);
+
+                var wait = new OpenQA.Selenium.Support.UI.WebDriverWait(driver, TimeSpan.FromSeconds(5));
+                wait.Until(OpenQA.Selenium.Support.UI.ExpectedConditions.ElementIsVisible(OpenQA.Selenium.By.CssSelector("div[class*=\"qr\"]")));
+
+                var screenshot = ((OpenQA.Selenium.ITakesScreenshot)driver).GetScreenshot();
+                string screenshotPath = $"{accId}.png";
+                screenshot.SaveAsFile(screenshotPath, OpenQA.Selenium.ScreenshotImageFormat.Png);
+
+                System.Threading.Thread.Sleep(240000); // 4 минуты
+            }
+        }
+#endif
     }
 }
