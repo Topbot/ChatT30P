@@ -57,6 +57,15 @@ namespace ChatT30P.Controllers.Api
             }
         }
 
+        private static string NormalizePhone(string phone)
+        {
+            if (string.IsNullOrWhiteSpace(phone)) return phone;
+            phone = phone.Trim();
+            if (phone.StartsWith("+"))
+                return phone.Substring(1);
+            return phone;
+        }
+
         [HttpGet]
         [Route("api/ChatAccounts")]
         public IEnumerable<ChatAccountItem> Get()
@@ -138,6 +147,9 @@ ORDER BY TRY_CONVERT(datetime, [created]) DESC";
             {
                 return Request.CreateResponse(HttpStatusCode.BadRequest);
             }
+
+            // Normalize phone: remove leading '+' if present
+            item.Phone = NormalizePhone(item.Phone);
 
             // Prevent AdsPower calls if the account already exists
             using (var cn = new SqlConnection(ConnectionString))
