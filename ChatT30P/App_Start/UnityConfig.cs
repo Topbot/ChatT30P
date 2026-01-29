@@ -1,7 +1,5 @@
 ﻿using ASP.App_Start;
-using ChatT30P.Contracts;
 using ChatT30P.Controllers.Api;
-using ChatT30P.Controllers.Data;
 using Unity;
 using Unity.Lifetime;
 
@@ -16,10 +14,7 @@ public class UnityConfig
     {
         var unity = new UnityContainer();
 
-        unity.RegisterType<YoutubeController>();
         unity.RegisterType<ChatAccountsController>();
-
-        unity.RegisterType<IYoutubeRepository, YoutubeRepository>(new HierarchicalLifetimeManager());
 
         config.DependencyResolver = new IoCContainer(unity);
     }

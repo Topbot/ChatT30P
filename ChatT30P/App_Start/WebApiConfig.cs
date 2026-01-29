@@ -27,7 +27,10 @@ namespace ChatT30P
                 defaults: new { id = RouteParameter.Optional }
             );
 
-            config.Routes.MapHttpRoute("DefaultApiWithActionAndId", "api/{controller}/{action}/{id}");
+            // Note: avoid adding a generic route that includes {action} because it can
+            // conflict with attribute routing and cause "Multiple actions were found"
+            // errors when there are several POST methods on the same controller.
+            // Attribute routing (MapHttpAttributeRoutes) is used for action-level routes.
 
 
             GlobalConfiguration.Configuration.MessageHandlers.Insert(0, new ServerCompressionHandler(new GZipCompressor(), new DeflateCompressor()));

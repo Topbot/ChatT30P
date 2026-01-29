@@ -24,7 +24,169 @@
         var s = ($scope.loginCode || '').toString();
         s = s.replace(/\D/g, '').substring(0, 6);
         $scope.loginCode = s;
-        $scope.isLoginCodeValid = s.length === 6;
+        $scope.isLoginCodeValid = s.length >= 1 && s.length <= 6;
+    };
+
+    $scope.addWhatsapp = function () {
+        if (window.UserVars && !window.UserVars.IsPaid && window.$) {
+            $("#modal-no-subscription").modal();
+            return;
+        }
+        $scope.onPhoneChange();
+        if (!$scope.isPhoneValid) {
+            return;
+        }
+
+        if (window.$) {
+            $("#modal-wait").modal();
+        }
+
+        var payload = {
+            Platform: 'Whatsapp',
+            Phone: $scope.phone,
+            Status: 0
+        };
+
+        $http.post('/api/ChatAccounts', payload).then(function () {
+            $scope.phone = "";
+            $scope.isPhoneValid = false;
+            $scope.load().then(function () {
+                if (window.$) {
+                    $("#modal-wait").modal('hide');
+                }
+
+                var platform = payload.Platform || payload.platform;
+                var phone = payload.Phone || payload.phone;
+                var added = null;
+                if ($scope.items && $scope.items.length) {
+                    for (var i = 0; i < $scope.items.length; i++) {
+                        var it = $scope.items[i];
+                        var p = it.Platform || it.platform;
+                        var ph = it.Phone || it.phone;
+                        if (p === platform && ph === phone) {
+                            added = it;
+                            break;
+                        }
+                    }
+                }
+
+                $scope.loginRequired(added || payload);
+            });
+        }, function (err) {
+            if (window.$) {
+                $("#modal-wait").modal('hide');
+            }
+            if (err && err.status === 409) {
+                var msg = (err.data && (err.data.Message || err.data.message)) || 'Указанный номер телефона уже в базе';
+                if (window.toastr && toastr.error) {
+                    toastr.error(msg);
+                } else {
+                    alert(msg);
+                }
+                return;
+            }
+            if (err && err.status === 402 && window.$) {
+                $("#modal-no-subscription").modal();
+                return;
+            }
+            if (err && err.status === 401) {
+                if (typeof $scope.checkAuth === 'function') {
+                    $scope.checkAuth();
+                } else if (window.UserVars && !window.UserVars.IsAdmin && window.$) {
+                    $("#modal-log-file").modal();
+                }
+                return;
+            }
+
+            // default error handling
+            var msg = (err && err.data && (err.data.Message || err.data.message)) || 'Не удалось добавить аккаунт.';
+            if (window.toastr && toastr.error) {
+                toastr.error(msg);
+            } else {
+                alert(msg);
+            }
+        });
+    };
+
+    $scope.addMax = function () {
+        if (window.UserVars && !window.UserVars.IsPaid && window.$) {
+            $("#modal-no-subscription").modal();
+            return;
+        }
+        $scope.onPhoneChange();
+        if (!$scope.isPhoneValid) {
+            return;
+        }
+
+        if (window.$) {
+            $("#modal-wait").modal();
+        }
+
+        var payload = {
+            Platform: 'Max',
+            Phone: $scope.phone,
+            Status: 0
+        };
+
+        $http.post('/api/ChatAccounts', payload).then(function () {
+            $scope.phone = "";
+            $scope.isPhoneValid = false;
+            $scope.load().then(function () {
+                if (window.$) {
+                    $("#modal-wait").modal('hide');
+                }
+
+                var platform = payload.Platform || payload.platform;
+                var phone = payload.Phone || payload.phone;
+                var added = null;
+                if ($scope.items && $scope.items.length) {
+                    for (var i = 0; i < $scope.items.length; i++) {
+                        var it = $scope.items[i];
+                        var p = it.Platform || it.platform;
+                        var ph = it.Phone || it.phone;
+                        if (p === platform && ph === phone) {
+                            added = it;
+                            break;
+                        }
+                    }
+                }
+
+                $scope.loginRequired(added || payload);
+            });
+        }, function (err) {
+            if (window.$) {
+                $("#modal-wait").modal('hide');
+            }
+            if (err && err.status === 409) {
+                var msg = (err.data && (err.data.Message || err.data.message)) || 'Указанный номер телефона уже в базе';
+                if (window.toastr && toastr.error) {
+                    toastr.error(msg);
+                } else {
+                    alert(msg);
+                }
+                return;
+            }
+            if (err && err.status === 402 && window.$) {
+                $("#modal-no-subscription").modal();
+                return;
+            }
+            if (err && err.status === 401) {
+                if (typeof $scope.checkAuth === 'function') {
+                    $scope.checkAuth();
+                } else if (window.UserVars && !window.UserVars.IsAdmin && window.$) {
+                    $("#modal-log-file").modal();
+                }
+                return;
+            }
+
+            // default error handling
+            var msg = (err && err.data && (err.data.Message || err.data.message)) || 'Не удалось добавить аккаунт.';
+            if (window.toastr && toastr.error) {
+                toastr.error(msg);
+            } else {
+                alert(msg);
+            }
+        });
     };
         if (loginTimerTimeoutPromise) {
             $timeout.cancel(loginTimerTimeoutPromise);
@@ -111,9 +273,31 @@
             clearQrPolling();
             $scope.qrCodeUrl = null;
             $scope.currentAdsPowerId = null;
+            try {
+                // If something left a modal backdrop behind, remove it to avoid grey overlay.
+                $('.modal-backdrop').remove();
+                $('body').removeClass('modal-open');
+            } catch (e) {
+            }
             $scope.$applyAsync();
         });
+        
+        $(document).on('hidden.bs.modal', '#modal-wait', function () {
+            try {
+                // Ensure all backdrops are removed
+                var backdrops = $('.modal-backdrop');
+                if (backdrops.length > 0) {
+                    backdrops.remove();
+                }
+                // Check if any modals are open, otherwise remove modal-open class
+                if ($('.modal:visible').length === 0) {
+                    $('body').removeClass('modal-open');
+                }
+            } catch (e) {
+            }
+        });
     }
+
 
     $scope.normalizePhone = function (value) {
         if (!value) return "";
@@ -193,25 +377,53 @@
             $scope.qrCodeUrl = null;
             $scope.currentAdsPowerId = (r && r.data && r.data.adsPowerId) ? r.data.adsPowerId : null;
             if (window.$) {
-                // ensure wait overlay is closed before showing next modal
-                $("#modal-wait").modal('hide');
-                $("#modal-login-required").modal();
-                // Start timer/polling after the modal is actually visible
-                $("#modal-login-required").one('shown.bs.modal', function () {
-                    startLoginTimer(5 * 60);
-                    clearQrPolling();
-                    pollQrCode();
-                    qrPollIntervalPromise = $interval(pollQrCode, 15000);
+                // Close modal-wait and ensure backdrop is cleaned up before showing modal-login-required
+                var waitModal = $("#modal-wait");
+                waitModal.modal('hide');
+                waitModal.on('hidden.bs.modal', function () {
+                    waitModal.off('hidden.bs.modal');
+                    // Ensure backdrop is removed
+                    $('.modal-backdrop').remove();
+                    $('body').removeClass('modal-open');
+                    // Now show the login required modal
+                    $("#modal-login-required").modal();
+                    // Start timer/polling after the modal is actually visible
+                    $("#modal-login-required").one('shown.bs.modal', function () {
+                        startLoginTimer(5 * 60);
+                        clearQrPolling();
+                        pollQrCode();
+                        qrPollIntervalPromise = $interval(pollQrCode, 15000);
+                    });
                 });
             } else {
                 alert('Вам скоро придёт код. Пожалуйста, введите его для залогинивания аккаунта.');
             }
         }, function (err) {
-            var msg = (err && err.data && (err.data.Message || err.data.message)) || 'Не удалось запустить профиль для залогинивания.';
+            var msg = 'Не удалось запустить профиль для залогинивания.';
+            
+            // Handle network errors
+            if (err && (err.status === 0 || err.status === -1)) {
+                msg = 'Ошибка соединения с сервером. Проверьте подключение к интернету и попробуйте снова.';
+            } else if (err && err.status === 402) {
+                msg = 'Нет активной подписки.';
+            } else if (err && err.status === 401) {
+                msg = 'Сессия истекла. Пожалуйста, перезагрузите страницу.';
+            } else if (err && err.data && (err.data.Message || err.data.message)) {
+                msg = err.data.Message || err.data.message;
+            }
+            
             if (window.toastr && toastr.error) {
                 toastr.error(msg);
             } else {
                 alert(msg);
+            }
+            if (window.$) {
+                $("#modal-wait").modal('hide');
+                try {
+                    $('.modal-backdrop').remove();
+                    $('body').removeClass('modal-open');
+                } catch (e) {
+                }
             }
         }).finally(function () {
             if (window.$) {
@@ -300,6 +512,8 @@
 
     $scope.remove = function (item) {
         if (!item) return;
+        if (item._deleting) return;
+        item._deleting = true;
         var url = '/api/ChatAccounts?platform=' + encodeURIComponent(item.Platform || item.platform || '') + '&phone=' + encodeURIComponent(item.Phone || item.phone || '');
         $http.delete(url).then(function () {
             $scope.load();
@@ -310,6 +524,40 @@
                 } else if (window.UserVars && !window.UserVars.IsAdmin && window.$) {
                     $("#modal-log-file").modal();
                 }
+            }
+        }).finally(function () {
+            item._deleting = false;
+        });
+    };
+
+    $scope.submitLoginCode = function () {
+        if (!$scope.isLoginCodeValid || !$scope.currentAdsPowerId) {
+            return;
+        }
+        
+        var payload = {
+            AdsPowerId: $scope.currentAdsPowerId,
+            Code: $scope.loginCode
+        };
+
+        $http.post('/api/ChatAccounts/SubmitLoginCode', payload).then(function (r) {
+            clearLoginTimer();
+            $scope.loginCode = "";
+            $scope.qrCodeUrl = null;
+            $scope.currentAdsPowerId = null;
+            if (window.$) {
+                $("#modal-login-required").modal('hide');
+            }
+            $scope.load();
+            if (window.toastr && toastr.success) {
+                toastr.success('Аккаунт успешно залогинирован!');
+            }
+        }, function (err) {
+            var msg = (err && err.data && (err.data.Message || err.data.message)) || 'Неверный код. Попробуйте снова.';
+            if (window.toastr && toastr.error) {
+                toastr.error(msg);
+            } else {
+                alert(msg);
             }
         });
     };

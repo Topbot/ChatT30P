@@ -91,10 +91,12 @@ namespace ChatT30P.Core
                 if (File.Exists(temp.FileName))
                 {
                     //пробуем уже загрузиться из файла
-                    using (var filedata = File.Open(temp.FileName, FileMode.Open))
+                    using (var filedata = new FileStream(temp.FileName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
                     {
-                        StreamReader stream = new StreamReader(filedata, Encoding.UTF8);
-                        return SerializerObj.Deserialize(new XmlTextReader(stream)) as MemberEntity;
+                        using (var stream = new StreamReader(filedata, Encoding.UTF8))
+                        {
+                            return SerializerObj.Deserialize(new XmlTextReader(stream)) as MemberEntity;
+                        }
                     }
                 }
                 //else

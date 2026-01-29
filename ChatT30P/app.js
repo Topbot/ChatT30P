@@ -21,6 +21,61 @@ function goPay() {
     }];
     app.config(config);
 
+    // Ensure all API calls are gated by auth check
+    app.config(["$httpProvider", function ($httpProvider) {
+        $httpProvider.interceptors.push(["$q", function ($q) {
+            function isApiUrl(url) {
+                if (!url) return false;
+                // url can be relative or absolute
+                return url.indexOf('/api/') === 0 || url.indexOf('\\/api\\/') === 0 || url.indexOf('/api') === 0;
+            }
+
+            function isLoggedIn() {
+                try {
+                    var hasAuthCookie = (document.cookie || '').indexOf('.ASPXAUTH=') >= 0;
+                    if (hasAuthCookie) return true;
+                    if (window.UserVars) {
+                        return !!window.UserVars.IsAuthenticated || (!!window.UserVars.Name && window.UserVars.Name !== '?');
+                    }
+                } catch (e) {
+                }
+                return false;
+            }
+
+            function showLoginModal() {
+                try {
+                    if (window.$) {
+                        $("#modal-log-file").modal();
+                    }
+                } catch (e) {
+                }
+            }
+
+            return {
+                request: function (config) {
+                    try {
+                        if (config && isApiUrl(config.url) && !isLoggedIn()) {
+                            showLoginModal();
+                            return $q.reject({ status: 401, data: { Message: 'Unauthorized' }, config: config });
+                        }
+                    } catch (e) {
+                    }
+                    return config;
+                },
+                responseError: function (rejection) {
+                    try {
+                        var cfg = rejection && rejection.config;
+                        if (rejection && rejection.status === 401 && cfg && isApiUrl(cfg.url)) {
+                            showLoginModal();
+                        }
+                    } catch (e) {
+                    }
+                    return $q.reject(rejection);
+                }
+            };
+        }]);
+    }]);
+
     app.directive('focusMe', ['$timeout', function ($timeout) {
         return function (scope, element, attrs) {
             scope.$watch(attrs.focusMe, function (value) {

@@ -39,15 +39,53 @@
             </div>
 
             <div class="col-md-4">
-                <button class="btn btn-default btn-block" disabled>
+                <button class="btn btn-success btn-block" data-ng-click="showWhatsapp = !showWhatsapp">
                     <i class="fa fa-whatsapp"></i> WhatsApp
                 </button>
+                <div data-ng-show="showWhatsapp" class="form-inline">
+                    <div class="form-group" style="width: 100%;">
+                        <input type="tel"
+                               inputmode="tel"
+                               class="form-control"
+                               style="width: 100%;"
+                               placeholder="Номер телефона (например: +79991234567)"
+                               data-ng-model="phone"
+                               data-ng-change="onPhoneChange()"
+                               data-ng-keypress="$event.which === 13 && isPhoneValid && addWhatsapp()"
+                               maxlength="18" />
+                    </div>
+                    <div class="help-block" data-ng-show="showWhatsapp && phone && !isPhoneValid">
+                        Введите номер телефона в международном формате (7–15 цифр, допускается ведущий "+").
+                    </div>
+                    <div style="text-align: center; margin-top: 10px;">
+                        <button class="btn btn-primary" data-ng-click="addWhatsapp()" data-ng-disabled="!isPhoneValid">Добавить</button>
+                    </div>
+                </div>
             </div>
 
             <div class="col-md-4">
-                <button class="btn btn-default btn-block" disabled>
+                <button class="btn btn-success btn-block" data-ng-click="showMax = !showMax">
                     <i class="fa fa-comments"></i> MessengerMAX
                 </button>
+                <div data-ng-show="showMax" class="form-inline">
+                    <div class="form-group" style="width: 100%;">
+                        <input type="tel"
+                               inputmode="tel"
+                               class="form-control"
+                               style="width: 100%;"
+                               placeholder="Номер телефона (например: +79991234567)"
+                               data-ng-model="phone"
+                               data-ng-change="onPhoneChange()"
+                               data-ng-keypress="$event.which === 13 && isPhoneValid && addMax()"
+                               maxlength="18" />
+                    </div>
+                    <div class="help-block" data-ng-show="showMax && phone && !isPhoneValid">
+                        Введите номер телефона в международном формате (7–15 цифр, допускается ведущий "+").
+                    </div>
+                    <div style="text-align: center; margin-top: 10px;">
+                        <button class="btn btn-primary" data-ng-click="addMax()" data-ng-disabled="!isPhoneValid">Добавить</button>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -65,6 +103,13 @@
                     <td>{{item.Platform || item.platform}}</td>
                     <td>{{item.Phone || item.phone}}</td>
                     <td>
+                        <span data-ng-if="((item.Platform || item.platform) === 'Whatsapp' || (item.Platform || item.platform) === 'WhatsApp' || (item.Platform || item.platform) === 'Max')">
+                            <span style="display:inline-block;width:10px;height:10px;border-radius:50%; background-color:#d9534f;"></span>
+                            <span style="display:inline-block; width:10px;"></span>
+                            <button class="btn btn-xs btn-default" disabled>эти платформы еще не поддерживаются</button>
+                        </span>
+
+                        <span data-ng-if="!(((item.Platform || item.platform) === 'Whatsapp' || (item.Platform || item.platform) === 'WhatsApp' || (item.Platform || item.platform) === 'Max'))">
                         <span style="display:inline-block;width:10px;height:10px;border-radius:50%;"
                               data-ng-style="{ 'background-color': (((item.Status !== undefined ? item.Status : item.status) == 0) ? '#d9534f' : '#5cb85c') }"></span>
                         <span style="display:inline-block; width:10px;"></span>
@@ -80,9 +125,15 @@
                                 data-ng-click="loadChats(item)">
                             {{ (getChatCount(item) > 0) ? ('Найдено ' + getChatCount(item) + ' чатов') : 'Загрузить чаты' }}
                         </button>
+                        </span>
                     </td>
                     <td>
-                        <button class="btn btn-danger btn-sm" data-ng-click="remove(item)">Удалить</button>
+                        <button class="btn btn-danger btn-sm"
+                                data-ng-click="remove(item)"
+                                data-ng-disabled="item._deleting">
+                            <span data-ng-if="!item._deleting">Удалить</span>
+                            <span data-ng-if="item._deleting"><i class="fa fa-spinner fa-spin"></i></span>
+                        </button>
                     </td>
                 </tr>
                 <tr data-ng-if="!items || items.length === 0">

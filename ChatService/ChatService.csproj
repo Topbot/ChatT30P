@@ -36,8 +36,11 @@
     <Reference Include="System.Drawing" />
     <Reference Include="System.ServiceProcess" />
     <Reference Include="System.Windows.Forms" />
+    <Reference Include="UIAutomationClient" />
+    <Reference Include="UIAutomationTypes" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="AdsPowerAutomation.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="RpaTaskPollerService.cs">
       <SubType>Component</SubType>

@@ -51,10 +51,6 @@
       <SpecificVersion>False</SpecificVersion>
       <HintPath>..\packages\Antlr.3.5.0.2\lib\Antlr3.Runtime.dll</HintPath>
     </Reference>
-    <Reference Include="BlogsAPI, Version=0.8.26.30120, Culture=neutral, processorArchitecture=MSIL">
-      <SpecificVersion>False</SpecificVersion>
-      <HintPath>..\..\BlogsAPI2\BlogsAPI\bin\Release\BlogsAPI.dll</HintPath>
-    </Reference>
     <Reference Include="Crc32C.NET, Version=1.0.5.0, Culture=neutral, processorArchitecture=MSIL">
       <HintPath>..\packages\Crc32C.NET.1.0.5.0\lib\net20\Crc32C.NET.dll</HintPath>
     </Reference>
@@ -247,10 +243,6 @@
       <SpecificVersion>False</SpecificVersion>
       <HintPath>..\..\T30P\TopTools\bin\Release\TopTools.dll</HintPath>
     </Reference>
-    <Reference Include="Twitch.Net, Version=1.0.0.0, Culture=neutral, processorArchitecture=MSIL">
-      <SpecificVersion>False</SpecificVersion>
-      <HintPath>..\..\..\Trash\twitch.net-master\Twitch.Net\bin\Release\Twitch.Net.dll</HintPath>
-    </Reference>
     <Reference Include="Unity.Abstractions, Version=5.11.7.0, Culture=neutral, PublicKeyToken=489b6accfaf20ef0, processorArchitecture=MSIL">
       <HintPath>..\packages\Unity.5.11.10\lib\net47\Unity.Abstractions.dll</HintPath>
     </Reference>
@@ -345,6 +337,7 @@
     <Content Include="Content\bootstrap-theme.css.map" />
     <Content Include="Content\bootstrap.min.css.map" />
     <Content Include="Content\bootstrap-theme.min.css.map" />
+    <Content Include="bin\CheckAdsPowerLogs.ps1" />
     <None Include="bundleconfig.json" />
     <Content Include="fonts\FontAwesome.otf" />
     <Content Include="fonts\fontawesome-webfont.woff2" />
@@ -1203,13 +1196,7 @@
     <Compile Include="Controllers\Api\ChatAccountsController.cs" />
     <Compile Include="Controllers\Api\QrCodeController.cs" />
     <Compile Include="Controllers\Api\UsersController.cs" />
-    <Compile Include="Controllers\Api\YoutubeController.cs" />
-    <Compile Include="Controllers\Contracts\IYoutubeRepository.cs" />
-    <Compile Include="Controllers\Data\YoutubeRepository.cs" />
     <Compile Include="Controllers\Models\ChatAccountItem.cs" />
-    <Compile Include="Controllers\Models\YoutubeItem.cs" />
-    <Compile Include="Controllers\Models\Item.cs" />
-    <Compile Include="Controllers\Models\YoutubeType.cs" />
     <Compile Include="Core\BlobMembershipProvider.cs" />
     <Compile Include="Core\BlogCulture.cs" />
     <Compile Include="Core\CustomIdentity.cs" />
@@ -1251,6 +1238,10 @@
   <ItemGroup>
     <Analyzer Include="..\packages\Microsoft.AnalyzerPowerPack.1.1.0\analyzers\dotnet\cs\Microsoft.AnalyzerPowerPack.Common.dll" />
     <Analyzer Include="..\packages\Microsoft.AnalyzerPowerPack.1.1.0\analyzers\dotnet\cs\Microsoft.AnalyzerPowerPack.CSharp.dll" />
+  </ItemGroup>
+  <ItemGroup>
+    <Folder Include="Controllers\Contracts\" />
+    <Folder Include="Controllers\Data\" />
   </ItemGroup>
   <PropertyGroup>
     <VisualStudioVersion Condition="'$(VisualStudioVersion)' == ''">10.0</VisualStudioVersion>

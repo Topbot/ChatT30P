@@ -99,19 +99,22 @@
                     Вам скоро придёт код. Пожалуйста, введите его в поле для залогинивания аккаунта.
                     <br />
                     <br />
+                    <div class="text-muted" style="margin-bottom:10px;">
+                        Обычно отправка кода занимает около 3 минут — не переживайте, если код не пришёл сразу.
+                    </div>
                     <div style="text-align:center; margin-bottom:10px;" data-ng-if="qrLoading && !qrCodeUrl">
                         <i class="fa fa-spinner fa-spin" style="font-size:24px;"></i>
                     </div>
 
-                    <div style="text-align:center; margin-bottom:10px;" data-ng-if="qrCodeUrl">
-                        <img data-ng-src="{{qrCodeUrl}}" style="width:300px;height:300px;object-fit:contain;" alt="QR" />
+                    <div data-ng-if="qrCodeUrl" style="display:flex; justify-content:center; align-items:center; margin-bottom:10px;">
+                        <img data-ng-src="{{qrCodeUrl}}" style="width:300px; max-width:100%; height:auto; object-fit:contain; display:block;" alt="QR" />
                     </div>
                     <div class="text-muted" style="margin-bottom:10px;">
                         Окно закроется через: <strong id="login-timer-text" data-ng-bind="loginTimerText"></strong>
                     </div>
                     <input type="text"
                            class="form-control"
-                           placeholder="Код (6 цифр)"
+                            placeholder="Код (до 6 цифр)"
                            inputmode="numeric"
                            pattern="\d*"
                            maxlength="6"

@@ -6,6 +6,7 @@ using System.Data.SqlClient;
 using System.Diagnostics;
 using System.Net.Http;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Net;
 using System.IO;
@@ -242,6 +243,8 @@ VALUES(@user_id, @platform, @phone, @status, @chats_json, @ads_power_id, GETDATE
             if (request == null || string.IsNullOrWhiteSpace(request.Platform) || string.IsNullOrWhiteSpace(request.Phone))
                 return Request.CreateResponse(HttpStatusCode.BadRequest);
 
+            LogAdsPowerError($"StartLogin called. userId={userId}, platform={request.Platform}, phone={request.Phone}");
+
             // Read current row
             string adsPowerId = null;
             using (var cn = new SqlConnection(ConnectionString))
@@ -260,6 +263,8 @@ WHERE user_id = @user_id AND platform = @platform AND phone = @phone";
                 adsPowerId = cmd.ExecuteScalar() as string;
             }
 
+            LogAdsPowerError($"Found adsPowerId in DB: {adsPowerId ?? "NULL"}");
+
             if (string.IsNullOrWhiteSpace(adsPowerId))
             {
                 if (string.IsNullOrWhiteSpace(AdsPowerBaseUrl) || string.IsNullOrWhiteSpace(AdsPowerToken))
@@ -268,8 +273,12 @@ WHERE user_id = @user_id AND platform = @platform AND phone = @phone";
                     return Request.CreateErrorResponse(HttpStatusCode.InternalServerError, "На сервере случилась критическая ошибка, обратитесь к администратору.");
                 }
 
+                LogAdsPowerError($"Creating new AdsPower profile for platform={request.Platform}, phone={request.Phone}");
                 var groupId = await EnsureAdsPowerGroupAsync(AdsPowerGroupName);
                 adsPowerId = await CreateAdsPowerProfileAsync(groupId, new ChatAccountItem { Platform = request.Platform, Phone = request.Phone });
+                
+                LogAdsPowerError($"Created new profile. groupId={groupId}, adsPowerId={adsPowerId}");
+                
                 if (string.IsNullOrWhiteSpace(groupId) || string.IsNullOrWhiteSpace(adsPowerId))
                     return Request.CreateErrorResponse(HttpStatusCode.InternalServerError, "На сервере случилась критическая ошибка, обратитесь к администратору.");
 
@@ -289,7 +298,10 @@ WHERE user_id = @user_id AND platform = @platform AND phone = @phone AND ads_pow
                     cn.Open();
                     cmd.ExecuteNonQuery();
                 }
+                
+                LogAdsPowerError($"Updated account with adsPowerId={adsPowerId}");
             }
+
 
             // Open AdsPower profile and run RPA script
             if (string.IsNullOrWhiteSpace(adsPowerId))
@@ -297,9 +309,45 @@ WHERE user_id = @user_id AND platform = @platform AND phone = @phone AND ads_pow
 
             // Instead of calling AdsPower RPA directly, enqueue task into DB.
             EnsureRpaTasksTable();
-            EnqueueRpaTask(adsPowerId, "StartLoginTelegram");
 
-                return Request.CreateResponse(HttpStatusCode.OK, new { adsPowerId });
+            var platform = (request.Platform ?? string.Empty).Trim();
+            string script;
+            if (platform.Equals("Telegram", StringComparison.OrdinalIgnoreCase))
+                script = "StartLoginTelegram";
+            else if (platform.Equals("Max", StringComparison.OrdinalIgnoreCase))
+                script = "StartLoginMax";
+            else if (platform.Equals("Whatsapp", StringComparison.OrdinalIgnoreCase) || platform.Equals("WhatsApp", StringComparison.OrdinalIgnoreCase))
+                script = "StartLoginWhatsapp";
+            else
+                script = "StartLoginTelegram";
+
+            LogAdsPowerError($"Selected script: {script}");
+
+            // Attempt to open AdsPower profile immediately from the server (headless start via AdsPower API).
+            // We prefer direct start instead of enqueuing a client-side RPA task.
+            string puppeteerUrl = null;
+            try
+            {
+                LogAdsPowerError($"StartLogin: attempting to open AdsPower profile immediately. adsPowerId={adsPowerId}");
+                puppeteerUrl = await OpenAdsPowerHeadlessAsync(adsPowerId);
+                if (!string.IsNullOrWhiteSpace(puppeteerUrl))
+                {
+                    LogAdsPowerError($"StartLogin: OpenAdsPowerHeadlessAsync returned puppeteer URL: {puppeteerUrl}");
+                }
+                else
+                {
+                    LogAdsPowerError($"StartLogin: OpenAdsPowerHeadlessAsync did not return a puppeteer URL for adsPowerId={adsPowerId}");
+                }
+            }
+            catch (Exception ex)
+            {
+                LogAdsPowerError($"StartLogin: OpenAdsPowerHeadlessAsync failed for adsPowerId={adsPowerId}", ex);
+                puppeteerUrl = null;
+            }
+
+            LogAdsPowerError($"StartLogin returning adsPowerId={adsPowerId}");
+            // Return puppeteer URL when available so caller may connect or diagnose. Keep legacy adsPowerId in response.
+            return Request.CreateResponse(HttpStatusCode.OK, new { adsPowerId, puppeteer = puppeteerUrl });
             }
             catch (Exception ex)
             {
@@ -316,6 +364,7 @@ WHERE user_id = @user_id AND platform = @platform AND phone = @phone AND ads_pow
                 using (var cn = new SqlConnection(ConnectionString))
                 using (var cmd = cn.CreateCommand())
                 {
+                    // rpa_tasks now stores optional puppeteer URL returned by AdsPower when opening a profile in headless mode
                     cmd.CommandText = @"
 IF OBJECT_ID('dbo.rpa_tasks', 'U') IS NULL
 BEGIN
@@ -323,6 +372,7 @@ BEGIN
         id INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
         ads_power_id NVARCHAR(128) NOT NULL,
         script_name NVARCHAR(128) NOT NULL,
+        puppeteer NVARCHAR(2048) NULL,
         created DATETIME NOT NULL DEFAULT(GETDATE())
     );
     CREATE INDEX IX_rpa_tasks_ads_power_id ON dbo.rpa_tasks(ads_power_id);
@@ -337,30 +387,146 @@ END";
             }
         }
 
-        private void EnqueueRpaTask(string adsPowerId, string scriptName)
+        private async Task EnqueueRpaTaskAsync(string adsPowerId, string scriptName)
         {
             if (string.IsNullOrWhiteSpace(ConnectionString)) return;
             if (string.IsNullOrWhiteSpace(adsPowerId) || string.IsNullOrWhiteSpace(scriptName)) return;
 
+            LogAdsPowerError($"EnqueueRpaTask started. adsPowerId={adsPowerId} script={scriptName}");
+
             try
             {
+                // Try to open AdsPower profile in headless mode via AdsPower v2 API and obtain puppeteer URL
+                string puppeteerUrl = null;
+                try
+                {
+                    LogAdsPowerError($"Attempting to open AdsPower profile: {adsPowerId}");
+                    // Use a longer timeout for opening AdsPower profile (up to 30 seconds)
+                    using (var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(30)))
+                    {
+                        puppeteerUrl = await OpenAdsPowerHeadlessAsync(adsPowerId);
+                        if (string.IsNullOrWhiteSpace(puppeteerUrl))
+                        {
+                            LogAdsPowerError($"OpenAdsPowerHeadless returned no puppeteer URL for adsPowerId={adsPowerId}");
+                        }
+                        else
+                        {
+                            LogAdsPowerError($"OpenAdsPowerHeadless succeeded. Puppeteer URL: {puppeteerUrl}");
+                        }
+                    }
+                }
+                catch (TaskCanceledException ex)
+                {
+                    LogAdsPowerError($"OpenAdsPowerHeadless timeout for {adsPowerId}", ex);
+                    puppeteerUrl = null;
+                }
+                catch (Exception ex)
+                {
+                    LogAdsPowerError($"OpenAdsPowerHeadless failed for {adsPowerId}", ex);
+                    puppeteerUrl = null;
+                }
+                
+                LogAdsPowerError($"Inserting into rpa_tasks. adsPowerId={adsPowerId}, script={scriptName}, puppeteer={puppeteerUrl}");
+                
                 using (var cn = new SqlConnection(ConnectionString))
                 using (var cmd = cn.CreateCommand())
                 {
                     cmd.CommandText = @"
-INSERT INTO dbo.rpa_tasks(ads_power_id, script_name)
-VALUES(@ads_power_id, @script_name)";
+INSERT INTO dbo.rpa_tasks(ads_power_id, script_name, puppeteer)
+VALUES(@ads_power_id, @script_name, @puppeteer)";
 
                     cmd.Parameters.Add("@ads_power_id", SqlDbType.NVarChar, 128).Value = adsPowerId;
                     cmd.Parameters.Add("@script_name", SqlDbType.NVarChar, 128).Value = scriptName;
+                    cmd.Parameters.Add("@puppeteer", SqlDbType.NVarChar, 2048).Value = (object)puppeteerUrl ?? DBNull.Value;
 
                     cn.Open();
                     cmd.ExecuteNonQuery();
                 }
+                
+                LogAdsPowerError($"RPA task inserted successfully. adsPowerId={adsPowerId}");
             }
             catch (Exception ex)
             {
                 LogAdsPowerError($"EnqueueRpaTask failed. adsPowerId={adsPowerId} script={scriptName}", ex);
+            }
+        }
+
+        private async Task<string> OpenAdsPowerHeadlessAsync(string adsPowerId)
+        {
+            if (string.IsNullOrWhiteSpace(AdsPowerBaseUrl) || string.IsNullOrWhiteSpace(AdsPowerToken) || string.IsNullOrWhiteSpace(adsPowerId))
+            {
+                LogAdsPowerError($"OpenAdsPowerHeadlessAsync: Missing configuration. BaseUrl={AdsPowerBaseUrl}, Token={AdsPowerToken}, adsPowerId={adsPowerId}");
+                return null;
+            }
+
+            // Attempt to open browser/profile via AdsPower v2 API in headless mode and return puppeteer/remote debugging URL
+            var url = $"{AdsPowerBaseUrl.TrimEnd('/')}/api/v2/browser/start?token={Uri.EscapeDataString(AdsPowerToken)}";
+            LogAdsPowerError($"OpenAdsPowerHeadlessAsync: Attempting to connect to {url}");
+            
+            var body = new
+            {
+                profile_id = adsPowerId
+            };
+
+            using (var http = new HttpClient())
+            {
+                try
+                {
+                    http.Timeout = TimeSpan.FromSeconds(25);
+                    var content = new StringContent(JsonConvert.SerializeObject(body), Encoding.UTF8, "application/json");
+                    LogAdsPowerError($"OpenAdsPowerHeadlessAsync: Sending request with body: {JsonConvert.SerializeObject(body)}");
+                    
+                    var resp = await http.PostAsync(url, content);
+                    var json = await resp.Content.ReadAsStringAsync();
+
+                    LogAdsPowerError($"OpenAdsPowerHeadlessAsync: Received response. Status={(int)resp.StatusCode}, Body={json}");
+
+                    if (!resp.IsSuccessStatusCode)
+                    {
+                        LogAdsPowerError($"AdsPower browser start failed. Status={(int)resp.StatusCode}. Body={json}");
+                        return null;
+                    }
+
+                    dynamic obj = null;
+                    try { obj = JsonConvert.DeserializeObject(json); }
+                    catch (Exception ex) { LogAdsPowerError($"AdsPower browser start JSON parse failed. Body={json}", ex); }
+
+                    if (obj == null || obj.code != 0 || obj.data == null)
+                    {
+                        LogAdsPowerError($"AdsPower browser start returned unexpected response. Body={json}");
+                        return null;
+                    }
+
+                    // try common fields for puppeteer/debug URL
+                    string found = null;
+                    try { if (obj.data.puppeteer_url != null) found = (string)obj.data.puppeteer_url; } catch { }
+                    try { if (found == null && obj.data.ws_url != null) found = (string)obj.data.ws_url; } catch { }
+                    try { if (found == null && obj.data.debugger_url != null) found = (string)obj.data.debugger_url; } catch { }
+                    try { if (found == null && obj.data.url != null) found = (string)obj.data.url; } catch { }
+
+                    if (string.IsNullOrWhiteSpace(found))
+                    {
+                        // log whole response to Windows Event Log for debugging
+                        LogAdsPowerError($"AdsPower headless start succeeded but no puppeteer URL found. Body={json}");
+                    }
+
+                    return found;
+                }
+                catch (HttpRequestException ex)
+                {
+                    LogAdsPowerError($"AdsPower connection error. URL={url}. Message={ex.Message}", ex);
+                    return null;
+                }
+                catch (TaskCanceledException ex)
+                {
+                    LogAdsPowerError($"AdsPower request timeout. URL={url}", ex);
+                    return null;
+                }
+                catch (Exception ex)
+                {
+                    LogAdsPowerError("AdsPower browser start failed with exception.", ex);
+                    return null;
+                }
             }
         }
 
@@ -469,40 +635,54 @@ VALUES(@ads_power_id, @script_name)";
 
         private async Task<string> CreateAdsPowerProfileAsync(string groupId, ChatAccountItem item)
         {
-            // Create profile: /api/v1/user/create (POST), requires group_id and fingerprint_config
+            // Create profile v2: POST /api/v2/browser-profile/create
             // We'll use minimal fingerprint_config with automatic timezone.
-            var url = $"{AdsPowerBaseUrl.TrimEnd('/')}/api/v1/user/create?token={Uri.EscapeDataString(AdsPowerToken)}";
+            var url = $"{AdsPowerBaseUrl.TrimEnd('/')}/api/v2/browser-profile/create?token={Uri.EscapeDataString(AdsPowerToken)}";
 
             var platform = (item?.Platform ?? string.Empty).Trim();
             var phoneDigits = new string(((item?.Phone ?? string.Empty).Trim()).Where(char.IsDigit).ToArray());
-            string domainName;
+            string platformDomain;
             if (platform.Equals("Telegram", StringComparison.OrdinalIgnoreCase))
             {
-                domainName = "web.telegram.org";
+                platformDomain = "web.telegram.org";
             }
             else if (platform.Equals("WhatsApp", StringComparison.OrdinalIgnoreCase))
             {
-                domainName = "https://web.whatsapp.com";
+                platformDomain = "web.whatsapp.com";
             }
             else if (platform.Equals("MAX", StringComparison.OrdinalIgnoreCase) || platform.Equals("MessengerMAX", StringComparison.OrdinalIgnoreCase))
             {
-                domainName = "web.max.ru";
+                platformDomain = "web.max.ru";
             }
             else
             {
-                domainName = "web.telegram.org";
+                platformDomain = "web.telegram.org";
             }
 
             var body = new
             {
                 name = $"{item.Platform}-{item.Phone}",
-                username = phoneDigits,
                 group_id = groupId,
-                domain_name = domainName,
-                proxyid = AdsPowerProxyId,
+                platform = platformDomain,
+                // Prefer direct connection.
+                user_proxy_config = new
+                {
+                    proxy_soft = "no_proxy"
+                },
                 fingerprint_config = new
                 {
-                    automatic_timezone = "1"
+                    automatic_timezone = "1",
+                    random_ua = new
+                    {
+                        ua_browser = new[] { "chrome" },
+                        ua_system_version = new[] { "Windows 10" },
+                        ua_version = new[] { "142" }
+                    },
+                    browser_kernel_config = new
+                    {
+                        type = "chrome",
+                        version = "142"
+                    }
                 }
             };
 
@@ -510,14 +690,6 @@ VALUES(@ads_power_id, @script_name)";
             {
                 try
                 {
-                    if (string.IsNullOrWhiteSpace(AdsPowerProxyId))
-                    {
-                        LogAdsPowerError("AdsPower profile create aborted: AdsPower:ProxyId is not configured.");
-                        return null;
-                    }
-
-                    // AdsPower proxy configuration is passed via proxyid (e.g. numeric id, random, etc.)
-
                     http.Timeout = TimeSpan.FromSeconds(20);
                     var content = new StringContent(JsonConvert.SerializeObject(body), Encoding.UTF8, "application/json");
                     var resp = await http.PostAsync(url, content);
@@ -533,13 +705,14 @@ VALUES(@ads_power_id, @script_name)";
                     try { obj = JsonConvert.DeserializeObject(json); }
                     catch (Exception ex) { LogAdsPowerError($"AdsPower profile create JSON parse failed. Body={json}", ex); }
 
-                    var ok = obj != null && obj.code == 0 && obj.data != null && obj.data.id != null;
+                    var ok = obj != null && obj.code == 0 && obj.data != null && (obj.data.profile_id != null || obj.data.id != null);
                     if (!ok)
                     {
                         LogAdsPowerError($"AdsPower profile create returned unexpected response. Body={json}");
                         return null;
                     }
 
+                    if (obj.data.profile_id != null) return (string)obj.data.profile_id;
                     return (string)obj.data.id;
                 }
                 catch (Exception ex)
@@ -596,6 +769,23 @@ WHERE user_id = @user_id AND platform = @platform AND phone = @phone";
                 catch
                 {
                     // best-effort: still delete from DB
+                }
+
+                // Also cleanup queued RPA tasks for this profile (best-effort)
+                try
+                {
+                    using (var cn = new SqlConnection(ConnectionString))
+                    using (var cmd = cn.CreateCommand())
+                    {
+                        cmd.CommandText = @"DELETE FROM dbo.rpa_tasks WHERE ads_power_id = @ads_power_id";
+                        cmd.Parameters.Add("@ads_power_id", SqlDbType.NVarChar, 128).Value = adsPowerId;
+                        cn.Open();
+                        cmd.ExecuteNonQuery();
+                    }
+                }
+                catch
+                {
+                    // ignore cleanup failures
                 }
             }
 
