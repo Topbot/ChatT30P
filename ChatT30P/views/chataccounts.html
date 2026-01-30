@@ -6,6 +6,12 @@
             <h2 class="page-title pull-left">
                 Привязанные аккаунты
             </h2>
+            <div class="pull-right" style="margin-top:10px;">
+                <button class="btn btn-default" data-ng-click="reload()" data-ng-disabled="_reloading">
+                    <span data-ng-if="!_reloading">Обновить</span>
+                    <span data-ng-if="_reloading"><i class="fa fa-spinner fa-spin"></i></span>
+                </button>
+            </div>
         </div>
 
         <div class="help-block" style="margin-bottom: 10px;">
@@ -116,8 +122,10 @@
 
                         <button class="btn btn-xs btn-warning"
                                 data-ng-if="(item.Status !== undefined ? item.Status : item.status) == 0"
-                                data-ng-click="loginRequired(item)">
-                            Требуется залогинивание
+                                data-ng-click="loginRequired(item)"
+                                data-ng-disabled="item._logining">
+                            <span data-ng-if="!item._logining">Требуется залогинивание</span>
+                            <span data-ng-if="item._logining"><i class="fa fa-spinner fa-spin"></i></span>
                         </button>
 
                         <button class="btn btn-xs btn-primary"

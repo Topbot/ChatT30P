@@ -19,6 +19,11 @@
             $interval.cancel(loginTimerIntervalPromise);
             loginTimerIntervalPromise = null;
         }
+    }
+    if (loginTimerDomIntervalId) {
+        clearInterval(loginTimerDomIntervalId);
+        loginTimerDomIntervalId = null;
+    }
 
     $scope.onLoginCodeChange = function () {
         var s = ($scope.loginCode || '').toString();
@@ -182,11 +187,6 @@
             }
         });
     };
-        if (loginTimerTimeoutPromise) {
-            $timeout.cancel(loginTimerTimeoutPromise);
-            loginTimerTimeoutPromise = null;
-        }
-    }
 
     function clearQrPolling() {
         if (qrPollIntervalPromise) {
@@ -275,7 +275,7 @@
             }
             $scope.$applyAsync();
         });
-        
+
         $(document).on('hidden.bs.modal', '#modal-wait', function () {
             try {
                 // Ensure all backdrops are removed
@@ -356,8 +356,20 @@
 
     $scope.loginModalDismissed = false;
 
+    $scope._reloading = false;
+    $scope.reload = function () {
+        if ($scope._reloading) return;
+        $scope._reloading = true;
+        $scope.load().finally(function () {
+            $scope._reloading = false;
+        });
+    };
+
     $scope.loginRequired = function (item) {
         if (!item) return;
+        // Prevent double clicks and show spinner similar to delete
+        if (item._logining) return;
+        item._logining = true;
         $scope.loginModalDismissed = false;
         var payload = {
             Platform: item.Platform || item.platform,
@@ -366,6 +378,7 @@
         if (window.$) {
             $(".modal").modal('hide');
         }
+
         $http.post('/api/ChatAccounts/StartLogin', payload).then(function (r) {
             $scope.loginCode = "";
             $scope.qrCodeUrl = null;
@@ -411,7 +424,6 @@
                 $("#modal-login-required").modal('hide');
             }
             var msg = 'Не удалось запустить профиль для залогинивания.';
-            
             // Handle network errors
             if (err && (err.status === 0 || err.status === -1)) {
                 msg = 'Ошибка соединения с сервером. Проверьте подключение к интернету и попробуйте снова.';
@@ -422,7 +434,6 @@
             } else if (err && err.data && (err.data.Message || err.data.message)) {
                 msg = err.data.Message || err.data.message;
             }
-            
             if (window.toastr && toastr.error) {
                 toastr.error(msg);
             } else {
@@ -439,6 +450,8 @@
         }).finally(function () {
             if (window.$) {
                 $("#modal-wait").modal('hide');
+                // restore button state
+                try { item._logining = false; } catch (e) { }
             }
         });
     };
@@ -545,7 +558,7 @@
         if (!$scope.isLoginCodeValid || !$scope.currentAdsPowerId) {
             return;
         }
-        
+
         var payload = {
             AdsPowerId: $scope.currentAdsPowerId,
             Code: $scope.loginCode

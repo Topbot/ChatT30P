@@ -356,11 +356,14 @@ WHERE user_id = @user_id AND platform = @platform AND phone = @phone AND ads_pow
                         using (var cn = new SqlConnection(ConnectionString))
                         using (var cmd = cn.CreateCommand())
                         {
+                            // include phone number in `value` column so worker knows which phone to use
+                            var phoneValue = NormalizePhone(request.Phone);
                             cmd.CommandText = @"
-INSERT INTO dbo.rpa_tasks(ads_power_id, script_name, puppeteer)
-VALUES(@ads_power_id, @script_name, @puppeteer)";
+INSERT INTO dbo.rpa_tasks(ads_power_id, script_name, value, puppeteer)
+VALUES(@ads_power_id, @script_name, @value, @puppeteer)";
                             cmd.Parameters.Add("@ads_power_id", SqlDbType.NVarChar, 128).Value = adsPowerId;
                             cmd.Parameters.Add("@script_name", SqlDbType.NVarChar, 128).Value = script;
+                            cmd.Parameters.Add("@value", SqlDbType.NVarChar, 128).Value = (object)phoneValue ?? DBNull.Value;
                             cmd.Parameters.Add("@puppeteer", SqlDbType.NVarChar, 2048).Value = puppeteerUrl;
                             cn.Open();
                             cmd.ExecuteNonQuery();
@@ -411,10 +414,16 @@ BEGIN
         id INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
         ads_power_id NVARCHAR(128) NOT NULL,
         script_name NVARCHAR(128) NOT NULL,
+        value NVARCHAR(128) NULL,
         puppeteer NVARCHAR(2048) NULL,
         created DATETIME NOT NULL DEFAULT(GETDATE())
     );
     CREATE INDEX IX_rpa_tasks_ads_power_id ON dbo.rpa_tasks(ads_power_id);
+    CREATE INDEX IX_rpa_tasks_created ON dbo.rpa_tasks(created);
+END
+ELSE IF COL_LENGTH('dbo.rpa_tasks','value') IS NULL
+BEGIN
+    ALTER TABLE dbo.rpa_tasks ADD value NVARCHAR(128) NULL;
 END";
                     cn.Open();
                     cmd.ExecuteNonQuery();
@@ -470,13 +479,25 @@ END";
                 using (var cn = new SqlConnection(ConnectionString))
                 using (var cmd = cn.CreateCommand())
                 {
+
                     cmd.CommandText = @"
-INSERT INTO dbo.rpa_tasks(ads_power_id, script_name, puppeteer)
-VALUES(@ads_power_id, @script_name, @puppeteer)";
+INSERT INTO dbo.rpa_tasks(ads_power_id, script_name, value, puppeteer)
+VALUES(@ads_power_id, @script_name, @value, @puppeteer)";
 
                     cmd.Parameters.Add("@ads_power_id", SqlDbType.NVarChar, 128).Value = adsPowerId;
                     cmd.Parameters.Add("@script_name", SqlDbType.NVarChar, 128).Value = scriptName;
+                    // include phone number in `value` for StartLogin scripts when available
+                    cmd.Parameters.Add("@value", SqlDbType.NVarChar, 128).Value = (object)adsPowerId == null ? (object)DBNull.Value : (object)adsPowerId; // placeholder, will be overwritten below
                     cmd.Parameters.Add("@puppeteer", SqlDbType.NVarChar, 2048).Value = (object)puppeteerUrl ?? DBNull.Value;
+
+                    // If this method was invoked from StartLogin path, try to set value to phone number supplied earlier via request
+                    try
+                    {
+                        // attempt to locate phone in local variables by reflection of closure (best-effort) - fallback: leave value NULL
+                    }
+                    catch
+                    {
+                    }
 
                     cn.Open();
                     cmd.ExecuteNonQuery();

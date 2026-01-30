@@ -2,11 +2,12 @@
 
 ## General Guidelines
 - First general instruction
+- Follow naming conventions
 - Second general instruction
 
 ## Code Style
 - Use specific formatting rules
-- Follow naming conventions
+
 
 ## Project-Specific Rules
 - The Cancel button click target is slightly left (approx okX + 80 instead of +150).

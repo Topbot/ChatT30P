@@ -19,8 +19,9 @@ namespace ChatT30P.Controllers.Api
         private static readonly TimeSpan MaxAge = TimeSpan.FromMinutes(30);
 
         // Координаты QR на скриншоте Telegram Web QR login.
-        // Если размер скриншота отличается, нужно подстроить значения.
-        private static readonly Rectangle TelegramQrCropRect = new Rectangle(x: 353, y: 80, width: 310, height: 310);
+        // Подправлены под новый макет: с запасом вправо/вниз, чтобы не обрезать правую часть QR.
+        // При необходимости можно ещё увеличить размер или сдвинуть координаты.
+        private static readonly Rectangle TelegramQrCropRect = new Rectangle(x: 300, y: 50, width: 420, height: 420);
 
         // Координаты QR для WhatsApp Web (пример на скрине).
         private static readonly Rectangle WhatsAppQrCropRect = new Rectangle(x: 880, y: 345, width: 320, height: 320);
