@@ -14,7 +14,7 @@ function goPay() {
 
     var config = ["$routeProvider", function ($routeProvider) {
         $routeProvider
-            .when("/", { templateUrl: "views/chataccounts.html?v=1" })
+            .when("/", { templateUrl: "views/chataccounts.html?v=0" })
             .when("/chats", { templateUrl: "views/chats.html?v=1" })
             .when("/users", { templateUrl: "views/users.html?v=1" })
         .otherwise({ redirectTo: "/" });

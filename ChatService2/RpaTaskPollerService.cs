@@ -11,6 +11,8 @@ using System.Net.Mail;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.Json;
+using System.Collections.Concurrent;
 
 namespace ChatService2
 {
@@ -21,6 +23,9 @@ namespace ChatService2
         private static DateTime _lastQueueAlertUtc = DateTime.MinValue;
         private int _pollIntervalMinutes;
         private readonly string? _connectionString;
+        private const int MaxConcurrency = 3;
+        private readonly SemaphoreSlim _semaphore = new SemaphoreSlim(MaxConcurrency);
+        private readonly ConcurrentBag<Task> _workerTasks = new ConcurrentBag<Task>();
 
         public RpaTaskPollerService(ILogger<RpaTaskPollerService> logger, IConfiguration configuration)
         {
@@ -29,6 +34,212 @@ namespace ChatService2
             _connectionString = configuration["CHAT_CONNECTION_STRING"] ?? configuration.GetConnectionString("Chat");
             if (string.IsNullOrWhiteSpace(_connectionString))
                 LogWarn("CHAT_CONNECTION_STRING was not provided via configuration or ConnectionStrings:Chat");
+        }
+
+        private async Task RunTelegramLoadChatsPuppeteerAsync(string? wsEndpoint, string accId)
+        {
+            LogInfo("[Puppeteer] Load Telegram chats for accId={AccId}", accId);
+            try
+            {
+                if (string.IsNullOrWhiteSpace(wsEndpoint))
+                {
+                    LogWarn("[Puppeteer] wsEndpoint is empty for accId={AccId}", accId);
+                    return;
+                }
+
+                var browser = await Puppeteer.ConnectAsync(new ConnectOptions { BrowserWSEndpoint = wsEndpoint });
+                Page? page = null;
+                try
+                {
+                    var pages = await browser.PagesAsync();
+                    if (pages != null && pages.Length > 0)
+                        page = (Page)pages[0];
+                }
+                catch (Exception ex)
+                {
+                    LogWarn(ex, "[Puppeteer] browser.PagesAsync() failed, will try NewPageAsync");
+                }
+
+                if (page == null)
+                {
+                    try { page = (Page)await browser.NewPageAsync(); }
+                    catch (Exception ex) { LogError(ex, "[Puppeteer] Failed to create new page for accId={AccId}", accId); return; }
+                }
+
+                await page.GoToAsync("https://web.telegram.org/a/", new NavigationOptions { WaitUntil = new[] { WaitUntilNavigation.DOMContentLoaded } });
+                LogInfo("[Puppeteer] Navigated to Telegram web for accId={AccId}", accId);
+
+                // Wait for the left navigation/chat list
+                var chatListSelector = "div[role='navigation']";
+                await page.WaitForSelectorAsync(chatListSelector);
+
+                // Execute JS in page to collect chat titles and previews by scrolling
+                var result = await page.EvaluateFunctionAsync<string>(@"async (chatListSelector) => {
+    const collected = {};
+    const el = document.querySelector(chatListSelector);
+    if (!el) return JSON.stringify(collected);
+    const itemsSelector = chatListSelector + ' [role=""listitem""]';
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+    for (let i = 0; i < 40; i++) {
+        const chats = Array.from(document.querySelectorAll(itemsSelector));
+        for (const chat of chats) {
+            try {
+                const titleEl = chat.querySelector('div[dir=""auto""]');
+                const title = titleEl ? titleEl.innerText.trim() : null;
+                if (!title) continue;
+                const previewEl = chat.querySelector('span');
+                const preview = previewEl ? previewEl.innerText.trim() : '';
+                if (!(title in collected)) collected[title] = preview;
+            } catch(e) {}
+        }
+        el.scrollBy(0, 300);
+        await sleep(400 + Math.random()*300);
+    }
+    return JSON.stringify(collected);
+}", chatListSelector);
+
+                if (string.IsNullOrWhiteSpace(result))
+                {
+                    LogWarn("[Puppeteer] No chats collected for accId={AccId}", accId);
+                    return;
+                }
+
+                // Save collected JSON into accounts.chats_json for this ads_power_id
+                try
+                {
+                    using var cn = new SqlConnection(_connectionString!);
+                    using var cmd = cn.CreateCommand();
+                    cmd.CommandTimeout = DbCommandTimeoutSeconds;
+                    cmd.CommandText = @"UPDATE accounts SET chats_json = @chats WHERE ads_power_id = @ads_power_id";
+                    cmd.Parameters.Add("@chats", SqlDbType.NVarChar).Value = result;
+                    cmd.Parameters.Add("@ads_power_id", SqlDbType.NVarChar, 128).Value = accId;
+                    cn.Open();
+                    var affected = cmd.ExecuteNonQuery();
+                    LogInfo("[Puppeteer] Saved chats for accId={AccId}, rowsAffected={Count}", accId, affected);
+                }
+                catch (Exception ex)
+                {
+                    LogError(ex, "[Puppeteer] Failed to save chats for accId={AccId}", accId);
+                }
+            }
+            catch (Exception ex)
+            {
+                LogError(ex, "[Puppeteer] Load chats failed for accId={AccId}", accId);
+            }
+        }
+
+        private async Task RunWhatsappSubmitCodePuppeteerAsync(string? wsEndpoint, string accId, string? code)
+        {
+            LogInfo("[Puppeteer] Submit WhatsApp login code for accId={AccId}", accId);
+            try
+            {
+                if (string.IsNullOrWhiteSpace(wsEndpoint))
+                {
+                    LogError("[Puppeteer] wsEndpoint is empty for accId={AccId}", accId);
+                    return;
+                }
+
+                var browser = await Puppeteer.ConnectAsync(new ConnectOptions { BrowserWSEndpoint = wsEndpoint });
+                Page? page = null;
+                try
+                {
+                    var pages = await browser.PagesAsync();
+                    if (pages != null && pages.Length > 0)
+                        page = (Page)pages[0];
+                }
+                catch (Exception ex)
+                {
+                    LogWarn(ex, "[Puppeteer] browser.PagesAsync() failed, will try NewPageAsync");
+                }
+
+                if (page == null)
+                {
+                    try { page = (Page)await browser.NewPageAsync(); }
+                    catch (Exception ex) { LogError(ex, "[Puppeteer] Failed to create new page for accId={AccId}", accId); return; }
+                }
+
+                try
+                {
+                    // WhatsApp code input selector may vary; commonly it's input[aria-label] or input[type=tel] when entering phone,
+                    // for code entry we look for input[id='sign-in-code'] or input[autocomplete='one-time-code']
+                    await page.WaitForSelectorAsync("input[id='sign-in-code'], input[autocomplete='one-time-code']", new WaitForSelectorOptions { Timeout = 10000 });
+                    // clear and type
+                    await page.EvaluateFunctionAsync(@"selector => {
+                        var el = document.querySelector(selector);
+                        if (el) { el.focus(); el.value=''; el.dispatchEvent(new Event('input',{bubbles:true})); }
+                    }", "input[id='sign-in-code'], input[autocomplete='one-time-code']");
+                    if (!string.IsNullOrWhiteSpace(code))
+                    {
+                        // type into the first matching element
+                        await page.TypeAsync("input[id='sign-in-code'], input[autocomplete='one-time-code']", code);
+                    }
+                    await page.ClickAsync("button[type='submit']");
+                    LogInfo("[Puppeteer] WhatsApp code submitted for accId={AccId}", accId);
+                }
+                catch (Exception ex)
+                {
+                    LogError(ex, "[Puppeteer] Failed to submit WhatsApp code for accId={AccId}", accId);
+                }
+            }
+            catch (Exception ex)
+            {
+                LogError(ex, "[Puppeteer] WhatsApp submit code failed for accId={AccId}", accId);
+            }
+        }
+
+        private async Task RunTelegramSubmitCodePuppeteerAsync(string? wsEndpoint, string accId, string? code)
+        {
+            LogInfo("[Puppeteer] Submit Telegram login code for accId={AccId}", accId);
+            try
+            {
+                if (string.IsNullOrWhiteSpace(wsEndpoint))
+                {
+                    LogError("[Puppeteer] wsEndpoint is empty for accId={AccId}", accId);
+                    return;
+                }
+
+                var browser = await Puppeteer.ConnectAsync(new ConnectOptions { BrowserWSEndpoint = wsEndpoint });
+                Page? page = null;
+                try
+                {
+                    var pages = await browser.PagesAsync();
+                    if (pages != null && pages.Length > 0)
+                        page = (Page)pages[0];
+                }
+                catch (Exception ex)
+                {
+                    LogWarn(ex, "[Puppeteer] browser.PagesAsync() failed, will try NewPageAsync");
+                }
+
+                if (page == null)
+                {
+                    try { page = (Page)await browser.NewPageAsync(); }
+                    catch (Exception ex) { LogError(ex, "[Puppeteer] Failed to create new page for accId={AccId}", accId); return; }
+                }
+
+                // Wait for code input and submit
+                try
+                {
+                    await page.WaitForSelectorAsync("input[id='sign-in-code']", new WaitForSelectorOptions { Timeout = 10000 });
+                    // clear via DOM and type code
+                    await page.EvaluateFunctionAsync(@"selector => {
+                        var el = document.querySelector(selector);
+                        if (el) { el.focus(); el.value=''; el.dispatchEvent(new Event('input',{bubbles:true})); }
+                    }", "input[id='sign-in-code']");
+                    if (!string.IsNullOrWhiteSpace(code))
+                        await page.TypeAsync("input[id='sign-in-code']", code);
+                    await page.ClickAsync("button[type='submit']");
+                    LogInfo("[Puppeteer] Code submitted for accId={AccId}", accId);
+                }
+                catch (Exception ex)
+                {
+                    LogError(ex, "[Puppeteer] Failed to submit code for accId={AccId}", accId);
+                }
+            }
+            catch (Exception ex)
+            {
+                LogError(ex, "[Puppeteer] Telegram submit code failed for accId={AccId}", accId);
+            }
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -81,6 +292,17 @@ namespace ChatService2
                 LogError(ex, "EnsureRpaTasksTable failed");
             }
 
+            try
+            {
+                var cleaned = DeleteStalePendingTasks();
+                if (cleaned > 0)
+                    LogInfo("Cleaned stale pending rpa_tasks: {Count}", cleaned);
+            }
+            catch (Exception ex)
+            {
+                LogWarn(ex, "DeleteStalePendingTasks failed");
+            }
+
             var count = GetPendingTasksCount();
             LogInfo("Pending RPA tasks: {Count}", count);
             if (count <= 0)
@@ -89,7 +311,7 @@ namespace ChatService2
                 return;
             }
 
-            var task = TryGetNextTask();
+                var task = TryClaimNextTask();
             if (task == null)
             {
                 LogInfo("No task found to process");
@@ -109,59 +331,20 @@ namespace ChatService2
                 var scriptNorm = (task.ScriptName ?? string.Empty).Replace("-", string.Empty).Replace("_", string.Empty).Replace(" ", string.Empty).ToLowerInvariant();
                 var processed = false;
 
-                if (scriptNorm.Contains("telegram") && scriptNorm.Contains("start") && scriptNorm.Contains("login")
-                    || scriptNorm == "telegramstartlogin" || scriptNorm == "startlogintelegram")
+                // Start background worker to process task without blocking tick.
+                var worker = Task.Run(async () =>
                 {
-                    processed = true;
+                    await _semaphore.WaitAsync();
                     try
                     {
-                        await RunTelegramStartLoginPuppeteerAsync(wsEndpoint, task.AdsPowerId, task.Value);
+                        await ProcessTaskAsync(task);
                     }
-                    catch (Exception ex)
+                    finally
                     {
-                        LogError(ex, "TelegramStartLogin script failed");
+                        _semaphore.Release();
                     }
-                }
-                else if (scriptNorm.Contains("whatsapp") && scriptNorm.Contains("start") && scriptNorm.Contains("login")
-                         || scriptNorm == "whatsappstartlogin" || scriptNorm == "startloginwhatsapp")
-                {
-                    processed = true;
-                    try
-                    {
-                        await RunWhatsappStartLoginPuppeteerAsync(wsEndpoint, task.AdsPowerId, task.Value);
-                    }
-                    catch (Exception ex)
-                    {
-                        LogError(ex, "WhatsappStartLogin script failed");
-                    }
-                }
-                else if (scriptNorm.Contains("max") && scriptNorm.Contains("start") && scriptNorm.Contains("login")
-                         || scriptNorm == "maxstartlogin" || scriptNorm == "startloginmax")
-                {
-                    processed = true;
-                    try
-                    {
-                        await RunMaxStartLoginPuppeteerAsync(wsEndpoint, task.AdsPowerId);
-                    }
-                    catch (Exception ex)
-                    {
-                        LogError(ex, "MaxStartLogin script failed");
-                    }
-                }
-                else
-                {
-                    LogError("Unrecognized script_name: {ScriptName}", task.ScriptName);
-                }
-
-                if (processed)
-                {
-                    var deleted = TryDeleteTask(task.Id);
-                    LogInfo(deleted ? "Task deleted" : "Task NOT deleted");
-                }
-                else
-                {
-                    LogInfo("Task NOT deleted because it was not processed");
-                }
+                });
+                _workerTasks.Add(worker);
             }
             catch (Exception ex)
             {
@@ -211,6 +394,123 @@ namespace ChatService2
             }
         }
 
+        // Atomically claim next pending task by setting status = 'processing' and returning the row
+        private RpaTask? TryClaimNextTask()
+        {
+            try
+            {
+                using var cn = new SqlConnection(_connectionString!);
+                using var cmd = cn.CreateCommand();
+                cmd.CommandTimeout = DbCommandTimeoutSeconds;
+
+                // Use MERGE/OUTPUT or update+select pattern. Simpler: update top(1) with OUTPUT
+                cmd.CommandText = @"
+DECLARE @id INT;
+;WITH cte AS (
+    SELECT TOP (1) id FROM dbo.rpa_tasks WHERE ISNULL(status,'pending') = 'pending' ORDER BY id
+)
+UPDATE dbo.rpa_tasks
+SET status = 'processing'
+OUTPUT inserted.id, inserted.ads_power_id, inserted.script_name, inserted.value, inserted.puppeteer
+WHERE id IN (SELECT id FROM cte);
+";
+
+                cn.Open();
+                using var r = cmd.ExecuteReader();
+                if (!r.Read()) return null;
+                var task = new RpaTask
+                {
+                    Id = r[0] == DBNull.Value ? 0 : Convert.ToInt32(r[0]),
+                    AdsPowerId = r[1] == DBNull.Value ? null : Convert.ToString(r[1]),
+                    ScriptName = r[2] == DBNull.Value ? null : Convert.ToString(r[2]),
+                    Value = r[3] == DBNull.Value ? null : Convert.ToString(r[3]),
+                    Puppeteer = r.FieldCount > 4 && r[4] != DBNull.Value ? Convert.ToString(r[4]) : null
+                };
+                LogInfo("Claimed task {Id} {AdsPowerId}", task.Id, task.AdsPowerId);
+                return task;
+            }
+            catch (Exception ex)
+            {
+                LogError(ex, "Failed to claim next rpa_task");
+                return null;
+            }
+        }
+
+        private async Task ProcessTaskAsync(RpaTask task)
+        {
+            try
+            {
+                var wsEndpoint = string.IsNullOrWhiteSpace(task.Puppeteer) ? task.Value : task.Puppeteer;
+                var scriptNorm = (task.ScriptName ?? string.Empty).Replace("-", string.Empty).Replace("_", string.Empty).Replace(" ", string.Empty).ToLowerInvariant();
+
+                // Load chats for Telegram
+                if (scriptNorm.Contains("loadchats") && scriptNorm.Contains("telegram") || scriptNorm == "loadchatstelegram")
+                {
+                    try { await RunTelegramLoadChatsPuppeteerAsync(wsEndpoint, task.AdsPowerId); }
+                    catch (Exception ex) { LogError(ex, "LoadChatsTelegram script failed for task {Id}", task.Id); }
+                }
+
+                // Submit code task (e.g. SubmitLoginTelegram)
+                if ((scriptNorm.Contains("telegram") && (scriptNorm.Contains("submit") || scriptNorm.Contains("code")))
+                    || scriptNorm == "submitlogintelegram" || scriptNorm == "telegramsumbitcode" || scriptNorm == "telegramsubmitcode")
+                {
+                    try { await RunTelegramSubmitCodePuppeteerAsync(wsEndpoint, task.AdsPowerId, task.Value); }
+                    catch (Exception ex) { LogError(ex, "TelegramSubmitCode script failed for task {Id}", task.Id); }
+                }
+                else if ((scriptNorm.Contains("whatsapp") && (scriptNorm.Contains("submit") || scriptNorm.Contains("code")))
+                         || scriptNorm == "submitloginwhatsapp" || scriptNorm == "whatsappsubmitcode" || scriptNorm == "whatsappsubmitcode")
+                {
+                    try { await RunWhatsappSubmitCodePuppeteerAsync(wsEndpoint, task.AdsPowerId, task.Value); }
+                    catch (Exception ex) { LogError(ex, "WhatsappSubmitCode script failed for task {Id}", task.Id); }
+                }
+                else if (scriptNorm.Contains("telegram") && scriptNorm.Contains("start") && scriptNorm.Contains("login")
+                    || scriptNorm == "telegramstartlogin" || scriptNorm == "startlogintelegram")
+                {
+                    try { await RunTelegramStartLoginPuppeteerAsync(wsEndpoint, task.AdsPowerId, task.Value); }
+                    catch (Exception ex) { LogError(ex, "TelegramStartLogin script failed for task {Id}", task.Id); }
+                }
+                else if (scriptNorm.Contains("whatsapp") && scriptNorm.Contains("start") && scriptNorm.Contains("login")
+                         || scriptNorm == "whatsappstartlogin" || scriptNorm == "startloginwhatsapp")
+                {
+                    try { await RunWhatsappStartLoginPuppeteerAsync(wsEndpoint, task.AdsPowerId, task.Value); }
+                    catch (Exception ex) { LogError(ex, "WhatsappStartLogin script failed for task {Id}", task.Id); }
+                }
+                else if (scriptNorm.Contains("max") && scriptNorm.Contains("start") && scriptNorm.Contains("login")
+                         || scriptNorm == "maxstartlogin" || scriptNorm == "startloginmax")
+                {
+                    try { await RunMaxStartLoginPuppeteerAsync(wsEndpoint, task.AdsPowerId); }
+                    catch (Exception ex) { LogError(ex, "MaxStartLogin script failed for task {Id}", task.Id); }
+                }
+                else
+                {
+                    LogError("Unrecognized script_name: {ScriptName}", task.ScriptName);
+                }
+
+                // On success remove the task
+                var deleted = TryDeleteTask(task.Id);
+                LogInfo(deleted ? "Task deleted" : "Task NOT deleted");
+            }
+            catch (Exception ex)
+            {
+                LogError(ex, "Processing task failed id={Id}", task.Id);
+                try
+                {
+                    // mark task as failed so it can be inspected
+                    using var cn = new SqlConnection(_connectionString!);
+                    using var cmd = cn.CreateCommand();
+                    cmd.CommandTimeout = DbCommandTimeoutSeconds;
+                    cmd.CommandText = "UPDATE dbo.rpa_tasks SET status = 'failed' WHERE id = @id";
+                    cmd.Parameters.Add("@id", SqlDbType.Int).Value = task.Id;
+                    cn.Open();
+                    cmd.ExecuteNonQuery();
+                }
+                catch (Exception inner)
+                {
+                    LogWarn(inner, "Failed to mark task failed id={Id}", task.Id);
+                }
+            }
+        }
+
         private bool TryDeleteTask(int id)
         {
             try
@@ -241,6 +541,27 @@ namespace ChatService2
             return obj == null || obj == DBNull.Value ? 0 : Convert.ToInt32(obj);
         }
 
+        private int DeleteStalePendingTasks()
+        {
+            // remove tasks with status pending (or NULL) older than 1 hour
+            using var cn = new SqlConnection(_connectionString!);
+            using var cmd = cn.CreateCommand();
+            cmd.CommandTimeout = DbCommandTimeoutSeconds;
+            cmd.CommandText = @"
+IF COL_LENGTH('dbo.rpa_tasks','status') IS NULL
+BEGIN
+    DELETE FROM dbo.rpa_tasks
+    WHERE created < DATEADD(hour, -1, GETUTCDATE());
+END
+ELSE
+BEGIN
+    DELETE FROM dbo.rpa_tasks
+    WHERE ISNULL(status,'pending') = 'pending' AND created < DATEADD(hour, -1, GETUTCDATE());
+END";
+            cn.Open();
+            return cmd.ExecuteNonQuery();
+        }
+
         private void EnsureRpaTasksTable()
         {
             using var cn = new SqlConnection(_connectionString!);
@@ -263,6 +584,16 @@ END
 ELSE IF COL_LENGTH('dbo.rpa_tasks','puppeteer') IS NULL
 BEGIN
     ALTER TABLE dbo.rpa_tasks ADD puppeteer NVARCHAR(2048) NULL;
+END
+ELSE IF COL_LENGTH('dbo.rpa_tasks','status') IS NULL
+BEGIN
+    ALTER TABLE dbo.rpa_tasks ADD status NVARCHAR(32) NULL DEFAULT('pending');
+END
+
+-- Ensure uniqueness: one pending/processing rpa task per ads_power_id + script_name
+IF NOT EXISTS(SELECT 1 FROM sys.indexes WHERE name = 'IX_rpa_tasks_ads_power_script' AND object_id = OBJECT_ID('dbo.rpa_tasks'))
+BEGIN
+    CREATE UNIQUE INDEX IX_rpa_tasks_ads_power_script ON dbo.rpa_tasks(ads_power_id, script_name);
 END";
             cn.Open();
             cmd.ExecuteNonQuery();
@@ -278,6 +609,7 @@ END";
                     LogError("[Puppeteer] wsEndpoint is empty for accId={AccId}", accId);
                     return;
                 }
+
 
                 var browser = await Puppeteer.ConnectAsync(new ConnectOptions { BrowserWSEndpoint = wsEndpoint });
                 Page? page = null;

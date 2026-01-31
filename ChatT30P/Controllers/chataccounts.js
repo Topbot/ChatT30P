@@ -357,6 +357,7 @@
     $scope.loginModalDismissed = false;
 
     $scope._reloading = false;
+    $scope._submittingCode = false;
     $scope.reload = function () {
         if ($scope._reloading) return;
         $scope._reloading = true;
@@ -375,17 +376,31 @@
             Platform: item.Platform || item.platform,
             Phone: item.Phone || item.phone
         };
+        // remember platform/phone for SubmitCode
+        $scope.currentPlatform = payload.Platform;
+        $scope.currentPhone = payload.Phone;
+        // Show login modal immediately to indicate waiting for code/profile
+        $scope.loginCode = "";
+        $scope.qrCodeUrl = null;
+        $scope.currentAdsPowerId = null;
+        $scope.qrLoading = true;
         if (window.$) {
-            $(".modal").modal('hide');
+            try { $(".modal").modal('hide'); $('.modal-backdrop').remove(); $('body').removeClass('modal-open'); } catch (e) {}
+            var $login = $("#modal-login-required");
+            $timeout(function () {
+                $login.modal('show');
+                $login.off('hidden.bs.modal.reopen');
+                $login.on('hidden.bs.modal', function () { $scope.loginModalDismissed = true; });
+            }, 50);
         }
 
         $http.post('/api/ChatAccounts/StartLogin', payload).then(function (r) {
+            $scope.qrLoading = false;
             $scope.loginCode = "";
             $scope.qrCodeUrl = null;
             $scope.currentAdsPowerId = (r && r.data && r.data.adsPowerId) ? r.data.adsPowerId : null;
             if (window.$) {
                 var $login = $("#modal-login-required");
-                $login.modal('show');
                 $login.one('shown.bs.modal', function () {
                     startLoginTimer(5 * 60);
                     clearQrPolling();
@@ -393,29 +408,30 @@
                     if (qrPollIntervalPromise) { $interval.cancel(qrPollIntervalPromise); }
                     qrPollIntervalPromise = $interval(pollQrCode, 15000);
                 });
-                $login.off('hidden.bs.modal.reopen').on('hidden.bs.modal.reopen', function () {
-                    $scope.loginModalDismissed = true;
-                });
             } else {
                 alert('Вам скоро придёт код. Пожалуйста, введите его для залогинивания аккаунта.');
             }
         }, function (err) {
             // Если дубль (409), просто показываем окно ожидания кода, не показываем ошибку
             if (err && err.status === 409) {
-                if (window.$) {
-                    var $login = $("#modal-login-required");
-                    $login.modal('show');
-                    $login.one('shown.bs.modal', function () {
-                        startLoginTimer(5 * 60);
-                        clearQrPolling();
-                        pollQrCode();
-                        if (qrPollIntervalPromise) { $interval.cancel(qrPollIntervalPromise); }
-                        qrPollIntervalPromise = $interval(pollQrCode, 15000);
-                    });
-                    $login.off('hidden.bs.modal.reopen').on('hidden.bs.modal.reopen', function () {
-                        $scope.loginModalDismissed = true;
-                    });
-                } else {
+                    if (window.$) {
+                        var $login = $("#modal-login-required");
+                        try { $('.modal-backdrop').remove(); $('body').removeClass('modal-open'); } catch (e) {}
+                        $timeout(function () {
+                            $login.modal('show');
+                            $login.one('shown.bs.modal', function () {
+                                startLoginTimer(5 * 60);
+                                clearQrPolling();
+                                pollQrCode();
+                                if (qrPollIntervalPromise) { $interval.cancel(qrPollIntervalPromise); }
+                                qrPollIntervalPromise = $interval(pollQrCode, 15000);
+                            });
+                            $login.off('hidden.bs.modal.reopen');
+                            $login.on('hidden.bs.modal', function () {
+                                $scope.loginModalDismissed = true;
+                            });
+                        }, 50);
+                    } else {
                     alert('Вам скоро придёт код. Пожалуйста, введите его для залогинивания аккаунта.');
                 }
                 return;
@@ -457,8 +473,31 @@
     };
 
     $scope.loadChats = function (item) {
-        // Placeholder: implement server endpoint to fetch chats and update item.ChatsJson
-        alert('Загрузка чатов пока не реализована.');
+        if (!item) return;
+        if (item._loadingChats) return;
+        item._loadingChats = true;
+
+        var payload = {
+            Platform: item.Platform || item.platform,
+            Phone: item.Phone || item.phone
+        };
+
+        $http.post('/api/ChatAccounts/StartLoadChats', payload).then(function (r) {
+            // server will enqueue rpa_task and wait up to 5 minutes; when returns OK we refresh list
+            if (r && r.status === 202) {
+                var warn = 'Задача на загрузку чатов поставлена в очередь, но не была обработана в отведённое время. Проверьте позже.';
+                if (window.toastr && toastr.warning) toastr.warning(warn); else alert(warn);
+            }
+            $scope.load().finally(function () { item._loadingChats = false; });
+        }, function (err) {
+            var msg = 'Не удалось запустить загрузку чатов.';
+            if (err && (err.status === 0 || err.status === -1)) msg = 'Ошибка соединения с сервером.';
+            else if (err && err.status === 402) msg = 'Нет активной подписки.';
+            else if (err && err.status === 409) msg = 'Задача загрузки чатов уже находится в очереди.';
+            else if (err && err.data && (err.data.Message || err.data.message)) msg = err.data.Message || err.data.message;
+            if (window.toastr && toastr.error) toastr.error(msg); else alert(msg);
+            item._loadingChats = false;
+        });
     };
 
     $scope.addTelegram = function () {
@@ -560,11 +599,15 @@
         }
 
         var payload = {
-            AdsPowerId: $scope.currentAdsPowerId,
+            Platform: $scope.currentPlatform,
+            Phone: $scope.currentPhone,
             Code: $scope.loginCode
         };
 
-        $http.post('/api/ChatAccounts/SubmitLoginCode', payload).then(function (r) {
+        if ($scope._submittingCode) return;
+        $scope._submittingCode = true;
+
+        $http.post('/api/ChatAccounts/SubmitCode', payload).then(function (r) {
             clearLoginTimer();
             $scope.loginCode = "";
             $scope.qrCodeUrl = null;
@@ -578,11 +621,15 @@
             }
         }, function (err) {
             var msg = (err && err.data && (err.data.Message || err.data.message)) || 'Неверный код. Попробуйте снова.';
+            if (err && err.status === 409) msg = 'Код уже обрабатывается.';
+            if (err && err.status === 202) msg = 'Код поставлен в очередь и обрабатывается асинхронно.';
             if (window.toastr && toastr.error) {
                 toastr.error(msg);
             } else {
                 alert(msg);
             }
+        }).finally(function () {
+            $scope._submittingCode = false;
         });
     };
 

@@ -124,7 +124,10 @@
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-default" data-dismiss="modal">Закрыть</button>
-                    <button type="button" class="btn btn-primary" data-ng-click="submitLoginCode()">Отправить</button>
+                    <button type="button" class="btn btn-primary" data-ng-click="submitLoginCode()" data-ng-disabled="_submittingCode">
+                        <span data-ng-if="!_submittingCode">Отправить</span>
+                        <span data-ng-if="_submittingCode"><i class="fa fa-spinner fa-spin"></i></span>
+                    </button>
                 </div>
             </div>
         </div>

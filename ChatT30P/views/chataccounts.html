@@ -130,8 +130,10 @@
 
                         <button class="btn btn-xs btn-primary"
                                 data-ng-if="(item.Status !== undefined ? item.Status : item.status) == 1"
-                                data-ng-click="loadChats(item)">
-                            {{ (getChatCount(item) > 0) ? ('Найдено ' + getChatCount(item) + ' чатов') : 'Загрузить чаты' }}
+                                data-ng-click="loadChats(item)"
+                                data-ng-disabled="item._loadingChats">
+                            <span data-ng-if="!item._loadingChats">{{ (getChatCount(item) > 0) ? ('Найдено ' + getChatCount(item) + ' чатов') : 'Загрузить чаты' }}</span>
+                            <span data-ng-if="item._loadingChats"><i class="fa fa-spinner fa-spin"></i></span>
                         </button>
                         </span>
                     </td>

@@ -46,6 +46,235 @@ namespace ChatT30P.Controllers.Api
             }
         }
 
+        [HttpPost]
+        [Route("api/ChatAccounts/StartLoadChats")]
+        public async Task<HttpResponseMessage> StartLoadChats([FromBody] dynamic request)
+        {
+            try
+            {
+                if (request == null) return Request.CreateResponse(HttpStatusCode.BadRequest);
+                string platform = (request.Platform ?? (string)null) as string;
+                string phone = (request.Phone ?? (string)null) as string;
+                if (string.IsNullOrWhiteSpace(platform) || string.IsNullOrWhiteSpace(phone))
+                    return Request.CreateResponse(HttpStatusCode.BadRequest);
+
+                var userId = HttpContext.Current?.User?.Identity?.Name;
+                if (string.IsNullOrEmpty(userId)) return Request.CreateResponse(HttpStatusCode.Unauthorized);
+                if (!Security.IsPaid) return Request.CreateResponse((HttpStatusCode)402, "No active subscription");
+
+                var script = "LoadChats" + platform.Replace(" ", "");
+
+                // Resolve adsPowerId for this account
+                string adsPowerId = null;
+                using (var cn = new SqlConnection(ConnectionString))
+                using (var cmd = cn.CreateCommand())
+                {
+                    cmd.CommandText = @"SELECT TOP 1 ads_power_id FROM accounts WHERE user_id = @user_id AND platform = @platform AND phone = @phone";
+                    cmd.Parameters.Add("@user_id", SqlDbType.NVarChar, 128).Value = userId;
+                    cmd.Parameters.Add("@platform", SqlDbType.NVarChar, 32).Value = platform.Trim();
+                    cmd.Parameters.Add("@phone", SqlDbType.NVarChar, 64).Value = phone.Trim();
+                    cn.Open();
+                    adsPowerId = cmd.ExecuteScalar() as string;
+                }
+
+                if (string.IsNullOrWhiteSpace(adsPowerId))
+                {
+                    LogAdsPowerError($"StartLoadChats: adsPowerId not found for user={userId} platform={platform} phone={phone}");
+                    return Request.CreateErrorResponse(HttpStatusCode.BadRequest, "Profile not found or not created yet");
+                }
+
+                // Try to ensure AdsPower browser/profile is open and obtain puppeteer URL
+                string puppeteerUrl = null;
+                try
+                {
+                    puppeteerUrl = await OpenAdsPowerHeadlessAsync(adsPowerId);
+                    LogAdsPowerError($"StartLoadChats: OpenAdsPowerHeadlessAsync returned puppeteerUrl={puppeteerUrl} for adsPowerId={adsPowerId}");
+                }
+                catch (Exception ex)
+                {
+                    LogAdsPowerError($"StartLoadChats: OpenAdsPowerHeadlessAsync failed for adsPowerId={adsPowerId}", ex);
+                    puppeteerUrl = null;
+                }
+
+                // enqueue rpa task with puppeteer URL when available
+                EnsureRpaTasksTable();
+                int insertedId = 0;
+                using (var cn2 = new SqlConnection(ConnectionString))
+                using (var cmd2 = cn2.CreateCommand())
+                {
+                    cmd2.CommandText = @"INSERT INTO dbo.rpa_tasks(ads_power_id, script_name, value, puppeteer)
+OUTPUT INSERTED.id
+VALUES(@ads_power_id, @script_name, @value, @puppeteer)";
+                    cmd2.Parameters.Add("@ads_power_id", SqlDbType.NVarChar, 128).Value = adsPowerId;
+                    cmd2.Parameters.Add("@script_name", SqlDbType.NVarChar, 128).Value = script;
+                    cmd2.Parameters.Add("@value", SqlDbType.NVarChar, 128).Value = DBNull.Value;
+                    cmd2.Parameters.Add("@puppeteer", SqlDbType.NVarChar, 2048).Value = (object)puppeteerUrl ?? DBNull.Value;
+                    cn2.Open();
+                    try { var obj = cmd2.ExecuteScalar(); if (obj != null && obj != DBNull.Value) insertedId = Convert.ToInt32(obj); }
+                    catch (SqlException sqex)
+                    {
+                        if (sqex.Number == 2601 || sqex.Number == 2627)
+                            return Request.CreateErrorResponse((HttpStatusCode)409, "RPA задача для этого профиля уже существует.");
+                        throw;
+                    }
+                }
+
+                if (insertedId <= 0) return Request.CreateErrorResponse(HttpStatusCode.InternalServerError, "Failed to enqueue rpa task.");
+
+                // wait up to 5 minutes for deletion
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                var timeout = TimeSpan.FromMinutes(5);
+                while (sw.Elapsed < timeout)
+                {
+                    bool exists = false;
+                    try
+                    {
+                        using (var cn = new SqlConnection(ConnectionString))
+                        using (var cmd = cn.CreateCommand())
+                        {
+                            cmd.CommandText = "SELECT COUNT(1) FROM dbo.rpa_tasks WHERE id = @id";
+                            cmd.Parameters.Add("@id", SqlDbType.Int).Value = insertedId;
+                            cn.Open();
+                            var obj = cmd.ExecuteScalar();
+                            exists = obj != null && obj != DBNull.Value && Convert.ToInt32(obj) > 0;
+                        }
+                    }
+                    catch { exists = true; }
+                    if (!exists) return Request.CreateResponse(HttpStatusCode.OK);
+                    await Task.Delay(1000);
+                }
+                return Request.CreateResponse((HttpStatusCode)202, "Task queued but not processed within timeout");
+            }
+            catch (Exception ex)
+            {
+                LogAdsPowerError("StartLoadChats failed.", ex);
+                return Request.CreateErrorResponse(HttpStatusCode.InternalServerError, ex);
+            }
+        }
+
+        public class SubmitLoginCodeRequest
+        {
+            public string AdsPowerId { get; set; }
+            public string Code { get; set; }
+        }
+
+        [HttpPost]
+        [Route("api/ChatAccounts/SubmitLoginCode")]
+        public async Task<HttpResponseMessage> SubmitLoginCode(SubmitLoginCodeRequest request)
+        {
+            try
+            {
+                if (request == null || string.IsNullOrWhiteSpace(request.AdsPowerId) || string.IsNullOrWhiteSpace(request.Code))
+                    return Request.CreateResponse(HttpStatusCode.BadRequest);
+
+                var userId = HttpContext.Current?.User?.Identity?.Name;
+                if (string.IsNullOrEmpty(userId))
+                    return Request.CreateResponse(HttpStatusCode.Unauthorized);
+
+                if (!Security.IsPaid)
+                    return Request.CreateResponse((HttpStatusCode)402, "No active subscription");
+
+                // Determine platform for adsPowerId to pick script name
+                string platform = null;
+                try
+                {
+                    using (var cn = new SqlConnection(ConnectionString))
+                    using (var cmd = cn.CreateCommand())
+                    {
+                        cmd.CommandText = "SELECT TOP 1 platform FROM accounts WHERE ads_power_id = @ads_power_id";
+                        cmd.Parameters.Add("@ads_power_id", SqlDbType.NVarChar, 128).Value = request.AdsPowerId.Trim();
+                        cn.Open();
+                        platform = cmd.ExecuteScalar() as string;
+                    }
+                }
+                catch { }
+
+                var script = "SubmitLoginTelegram";
+                if (!string.IsNullOrWhiteSpace(platform))
+                {
+                    if (platform.Equals("Whatsapp", StringComparison.OrdinalIgnoreCase) || platform.Equals("WhatsApp", StringComparison.OrdinalIgnoreCase))
+                        script = "SubmitLoginWhatsapp";
+                    else if (platform.Equals("Max", StringComparison.OrdinalIgnoreCase))
+                        script = "SubmitLoginMax";
+                    else if (platform.Equals("Telegram", StringComparison.OrdinalIgnoreCase))
+                        script = "SubmitLoginTelegram";
+                }
+
+                // ensure table exists
+                EnsureRpaTasksTable();
+
+                int insertedId = 0;
+                using (var cn = new SqlConnection(ConnectionString))
+                using (var cmd = cn.CreateCommand())
+                {
+                    cmd.CommandText = @"INSERT INTO dbo.rpa_tasks(ads_power_id, script_name, value)
+OUTPUT INSERTED.id
+VALUES(@ads_power_id, @script_name, @value)";
+                    cmd.Parameters.Add("@ads_power_id", SqlDbType.NVarChar, 128).Value = request.AdsPowerId.Trim();
+                    cmd.Parameters.Add("@script_name", SqlDbType.NVarChar, 128).Value = script;
+                    cmd.Parameters.Add("@value", SqlDbType.NVarChar, 128).Value = request.Code.Trim();
+                    cn.Open();
+                    try
+                    {
+                        var obj = cmd.ExecuteScalar();
+                        if (obj != null && obj != DBNull.Value)
+                            insertedId = Convert.ToInt32(obj);
+                    }
+                    catch (SqlException sqex)
+                    {
+                        // Duplicate index (unique constraint) on ads_power_id + script_name
+                        if (sqex.Number == 2601 || sqex.Number == 2627)
+                        {
+                            LogAdsPowerError($"RPA task insert duplicate for adsPowerId={request.AdsPowerId}, script={script}", sqex);
+                            return Request.CreateErrorResponse((HttpStatusCode)409, "RPA задача для этого профиля уже существует.");
+                        }
+                        throw;
+                    }
+                }
+
+                if (insertedId <= 0)
+                    return Request.CreateErrorResponse(HttpStatusCode.InternalServerError, "Failed to enqueue rpa task.");
+
+                // Wait up to 5 minutes for the task to be processed (deleted or status changed)
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                var timeout = TimeSpan.FromMinutes(5);
+                while (sw.Elapsed < timeout)
+                {
+                    bool exists = false;
+                    try
+                    {
+                        using (var cn = new SqlConnection(ConnectionString))
+                        using (var cmd = cn.CreateCommand())
+                        {
+                            cmd.CommandText = "SELECT COUNT(1) FROM dbo.rpa_tasks WHERE id = @id";
+                            cmd.Parameters.Add("@id", SqlDbType.Int).Value = insertedId;
+                            cn.Open();
+                            var obj = cmd.ExecuteScalar();
+                            exists = obj != null && obj != DBNull.Value && Convert.ToInt32(obj) > 0;
+                        }
+                    }
+                    catch
+                    {
+                        // ignore and retry
+                        exists = true;
+                    }
+
+                    if (!exists)
+                        return Request.CreateResponse(HttpStatusCode.OK);
+
+                    await Task.Delay(1000);
+                }
+
+                return Request.CreateResponse((HttpStatusCode)202, "Task queued but not processed within timeout");
+            }
+            catch (Exception ex)
+            {
+                LogAdsPowerError("ChatAccounts SubmitLoginCode failed.", ex);
+                return Request.CreateErrorResponse(HttpStatusCode.InternalServerError, ex);
+            }
+        }
+        
+
         // Write AdsPower-related messages to file logs only (avoid Windows Event Log)
         private static void LogAdsPowerToFile(string message, Exception ex = null)
         {
@@ -263,6 +492,7 @@ VALUES(@user_id, @platform, @phone, @status, @chats_json, @ads_power_id, GETDATE
 
             LogAdsPowerError($"StartLogin called. userId={userId}, platform={request.Platform}, phone={request.Phone}");
 
+            
             // Read current row
             string adsPowerId = null;
             using (var cn = new SqlConnection(ConnectionString))
@@ -275,7 +505,7 @@ WHERE user_id = @user_id AND platform = @platform AND phone = @phone";
 
                 cmd.Parameters.Add("@user_id", SqlDbType.NVarChar, 128).Value = userId;
                 cmd.Parameters.Add("@platform", SqlDbType.NVarChar, 32).Value = request.Platform.Trim();
-                cmd.Parameters.Add("@phone", SqlDbType.NVarChar, 64).Value = request.Phone.Trim();
+                cmd.Parameters.Add("@phone", SqlDbType.NVarChar, 64).Value = NormalizePhone(request.Phone);
 
                 cn.Open();
                 adsPowerId = cmd.ExecuteScalar() as string;
@@ -285,39 +515,9 @@ WHERE user_id = @user_id AND platform = @platform AND phone = @phone";
 
             if (string.IsNullOrWhiteSpace(adsPowerId))
             {
-                if (string.IsNullOrWhiteSpace(AdsPowerBaseUrl) || string.IsNullOrWhiteSpace(AdsPowerToken))
-                {
-                    LogAdsPowerError("AdsPower StartLogin failed: AdsPower is not configured.");
-                    return Request.CreateErrorResponse(HttpStatusCode.InternalServerError, "На сервере случилась критическая ошибка, обратитесь к администратору.");
-                }
-
-                LogAdsPowerError($"Creating new AdsPower profile for platform={request.Platform}, phone={request.Phone}");
-                var groupId = await EnsureAdsPowerGroupAsync(AdsPowerGroupName);
-                adsPowerId = await CreateAdsPowerProfileAsync(groupId, new ChatAccountItem { Platform = request.Platform, Phone = request.Phone });
-                
-                LogAdsPowerError($"Created new profile. groupId={groupId}, adsPowerId={adsPowerId}");
-                
-                if (string.IsNullOrWhiteSpace(groupId) || string.IsNullOrWhiteSpace(adsPowerId))
-                    return Request.CreateErrorResponse(HttpStatusCode.InternalServerError, "На сервере случилась критическая ошибка, обратитесь к администратору.");
-
-                using (var cn = new SqlConnection(ConnectionString))
-                using (var cmd = cn.CreateCommand())
-                {
-                    cmd.CommandText = @"
-UPDATE accounts
-SET ads_power_id = @ads_power_id
-WHERE user_id = @user_id AND platform = @platform AND phone = @phone AND ads_power_id IS NULL";
-
-                    cmd.Parameters.Add("@ads_power_id", SqlDbType.NVarChar, 128).Value = adsPowerId;
-                    cmd.Parameters.Add("@user_id", SqlDbType.NVarChar, 128).Value = userId;
-                    cmd.Parameters.Add("@platform", SqlDbType.NVarChar, 32).Value = request.Platform.Trim();
-                    cmd.Parameters.Add("@phone", SqlDbType.NVarChar, 64).Value = request.Phone.Trim();
-
-                    cn.Open();
-                    cmd.ExecuteNonQuery();
-                }
-                
-                LogAdsPowerError($"Updated account with adsPowerId={adsPowerId}");
+                // Do not create AdsPower profiles automatically during StartLogin.
+                LogAdsPowerError($"StartLogin: ads_power_id missing for user={userId}, platform={request.Platform}, phone={request.Phone}. Returning error without creating profile.");
+                return Request.CreateErrorResponse(HttpStatusCode.BadRequest, "AdsPower profile is not created for this account. Please add the account first.");
             }
 
             // Open AdsPower profile and run RPA script
@@ -808,6 +1008,9 @@ VALUES(@ads_power_id, @script_name, @value, @puppeteer)";
                         return null;
                     }
 
+                    //ожидание на случай долгого обращения в БД
+                    Thread.Sleep(3000);
+
                     if (obj.data.profile_id != null) return (string)obj.data.profile_id;
                     return (string)obj.data.id;
                 }
@@ -817,6 +1020,7 @@ VALUES(@ads_power_id, @script_name, @value, @puppeteer)";
                     return null;
                 }
             }
+
         }
 
         [HttpDelete]
