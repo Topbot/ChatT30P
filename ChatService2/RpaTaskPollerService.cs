@@ -550,13 +550,16 @@ WHERE id IN (SELECT id FROM cte);
             cmd.CommandText = @"
 IF COL_LENGTH('dbo.rpa_tasks','status') IS NULL
 BEGIN
+    -- No status column: delete tasks older than 1 hour
     DELETE FROM dbo.rpa_tasks
     WHERE created < DATEADD(hour, -1, GETUTCDATE());
 END
 ELSE
 BEGIN
+    -- Remove tasks that are stuck in pending OR processing for more than 1 hour
     DELETE FROM dbo.rpa_tasks
-    WHERE ISNULL(status,'pending') = 'pending' AND created < DATEADD(hour, -1, GETUTCDATE());
+    WHERE ISNULL(status,'pending') IN ('pending','processing')
+      AND created < DATEADD(hour, -1, GETUTCDATE());
 END";
             cn.Open();
             return cmd.ExecuteNonQuery();

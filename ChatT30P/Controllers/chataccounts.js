@@ -194,11 +194,13 @@
             qrPollIntervalPromise = null;
         }
         $scope.qrLoading = false;
+        try { $scope.$applyAsync(); } catch (e) { }
     }
 
     function pollQrCode() {
         if (!$scope.currentAdsPowerId) return;
         $scope.qrLoading = true;
+        try { $scope.$applyAsync(); } catch (e) { }
         var url = '/api/QrCode?adsPowerId=' + encodeURIComponent($scope.currentAdsPowerId) + '&_=' + Date.now();
         $http.get(url, { responseType: 'arraybuffer' }).then(function (r) {
             if (r && r.status === 200 && r.data) {
@@ -206,6 +208,7 @@
                 var objectUrl = (window.URL || window.webkitURL).createObjectURL(blob);
                 $scope.qrCodeUrl = objectUrl;
                 clearQrPolling();
+                try { $scope.$applyAsync(); } catch (e) { }
             }
         }, function () {
             // 404 is expected until screenshot appears
@@ -356,6 +359,34 @@
 
     $scope.loginModalDismissed = false;
 
+    // Modal is rendered outside ng-view and may not be in this controller's scope.
+    // Mirror key fields to $rootScope so modal bindings can access them.
+    $rootScope.loginCode = $rootScope.loginCode || "";
+    $rootScope.isLoginCodeValid = $rootScope.isLoginCodeValid || false;
+    $rootScope.currentPlatform = $rootScope.currentPlatform || null;
+    $rootScope.currentPhone = $rootScope.currentPhone || null;
+    $rootScope._submittingCode = $rootScope._submittingCode || false;
+
+    $scope.isLoginCodeValid = false;
+    $scope.onLoginCodeChange = function () {
+        // modal is bound to $rootScope.loginCode
+        var current = (typeof $rootScope.loginCode === 'string' || typeof $rootScope.loginCode === 'number') ? $rootScope.loginCode : $scope.loginCode;
+        var s = ('' + (current || '')).trim();
+        // allow 1..6 digits
+        s = s.replace(/\D/g, '');
+        if (s !== ('' + (current || ''))) {
+            $rootScope.loginCode = s;
+            $scope.loginCode = s;
+        } else {
+            $scope.loginCode = current;
+        }
+        $scope.isLoginCodeValid = s.length > 0 && s.length <= 6;
+        $rootScope.loginCode = $scope.loginCode;
+        $rootScope.isLoginCodeValid = $scope.isLoginCodeValid;
+    };
+
+    $rootScope.onLoginCodeChange = $scope.onLoginCodeChange;
+
     $scope._reloading = false;
     $scope._submittingCode = false;
     $scope.reload = function () {
@@ -379,15 +410,27 @@
         // remember platform/phone for SubmitCode
         $scope.currentPlatform = payload.Platform;
         $scope.currentPhone = payload.Phone;
+        $rootScope.currentPlatform = $scope.currentPlatform;
+        $rootScope.currentPhone = $scope.currentPhone;
         // Show login modal immediately to indicate waiting for code/profile
         $scope.loginCode = "";
+        $scope.isLoginCodeValid = false;
+        $rootScope.loginCode = "";
+        $rootScope.isLoginCodeValid = false;
+        // force compute validity whenever code changes (covers modal open without change event)
+        $timeout(function () { try { $scope.onLoginCodeChange(); } catch (e) { } }, 0);
         $scope.qrCodeUrl = null;
         $scope.currentAdsPowerId = null;
         $scope.qrLoading = true;
+        // normalize to non-null strings so ng-disabled works reliably
+        $scope.currentPlatform = ("" + ($scope.currentPlatform || '')).trim();
+        $scope.currentPhone = ("" + ($scope.currentPhone || '')).trim();
         if (window.$) {
             try { $(".modal").modal('hide'); $('.modal-backdrop').remove(); $('body').removeClass('modal-open'); } catch (e) {}
             var $login = $("#modal-login-required");
             $timeout(function () {
+                // defensive: remove any leftover backdrops that may intercept clicks
+                try { $('.modal-backdrop').remove(); } catch (e) {}
                 $login.modal('show');
                 $login.off('hidden.bs.modal.reopen');
                 $login.on('hidden.bs.modal', function () { $scope.loginModalDismissed = true; });
@@ -395,19 +438,27 @@
         }
 
         $http.post('/api/ChatAccounts/StartLogin', payload).then(function (r) {
-            $scope.qrLoading = false;
+            // keep spinner until QR is actually fetched
+            $scope.qrLoading = true;
             $scope.loginCode = "";
             $scope.qrCodeUrl = null;
             $scope.currentAdsPowerId = (r && r.data && r.data.adsPowerId) ? r.data.adsPowerId : null;
             if (window.$) {
                 var $login = $("#modal-login-required");
-                $login.one('shown.bs.modal', function () {
+                var startHandler = function () {
                     startLoginTimer(5 * 60);
                     clearQrPolling();
                     pollQrCode();
-                    if (qrPollIntervalPromise) { $interval.cancel(qrPollIntervalPromise); }
+                    try { if (qrPollIntervalPromise) { $interval.cancel(qrPollIntervalPromise); } } catch(e) {}
                     qrPollIntervalPromise = $interval(pollQrCode, 15000);
-                });
+                    try { $scope.$applyAsync(); } catch (e) { }
+                };
+                // If modal was already shown earlier, 'shown.bs.modal' already fired — run immediately
+                if ($login.is(':visible') || $login.hasClass('show') || $login.hasClass('in')) {
+                    startHandler();
+                } else {
+                    $login.one('shown.bs.modal', startHandler);
+                }
             } else {
                 alert('Вам скоро придёт код. Пожалуйста, введите его для залогинивания аккаунта.');
             }
@@ -594,18 +645,20 @@
     };
 
     $scope.submitLoginCode = function () {
-        if (!$scope.isLoginCodeValid || !$scope.currentAdsPowerId) {
+        // For SubmitCode we validate by platform/phone + code; AdsPowerId is not required.
+        if (!$scope.isLoginCodeValid || !$scope.currentPlatform || !$scope.currentPhone) {
             return;
         }
 
         var payload = {
             Platform: $scope.currentPlatform,
             Phone: $scope.currentPhone,
-            Code: $scope.loginCode
+            Code: ($rootScope.loginCode != null ? ('' + $rootScope.loginCode) : ('' + ($scope.loginCode || '')))
         };
 
         if ($scope._submittingCode) return;
         $scope._submittingCode = true;
+        $rootScope._submittingCode = true;
 
         $http.post('/api/ChatAccounts/SubmitCode', payload).then(function (r) {
             clearLoginTimer();
@@ -630,8 +683,11 @@
             }
         }).finally(function () {
             $scope._submittingCode = false;
+            $rootScope._submittingCode = false;
         });
     };
+
+    $rootScope.submitLoginCode = $scope.submitLoginCode;
 
     $scope.load();
 

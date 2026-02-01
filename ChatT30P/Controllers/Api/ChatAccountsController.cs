@@ -13,9 +13,12 @@ using System.IO;
 using System.Web;
 using System.Web.Http;
 using System.Linq;
+using System.Collections.Concurrent;
 using ChatT30P.Controllers.Models;
 using Core;
 using Newtonsoft.Json;
+using WTelegram;
+using TL;
 
 namespace ChatT30P.Controllers.Api
 {
@@ -27,6 +30,12 @@ namespace ChatT30P.Controllers.Api
         private static string AdsPowerToken => ConfigurationManager.AppSettings["AdsPower:Token"];
         private static string AdsPowerProxyId => ConfigurationManager.AppSettings["AdsPower:ProxyId"];
         private const string AdsPowerGroupName = "CHAT";
+
+        private static string TelegramApiId => ConfigurationManager.AppSettings["Telegram:ApiId"];
+        private static string TelegramApiHash => ConfigurationManager.AppSettings["Telegram:ApiHash"];
+
+        private static readonly ConcurrentDictionary<string, SemaphoreSlim> SessionSemaphores =
+            new ConcurrentDictionary<string, SemaphoreSlim>(StringComparer.OrdinalIgnoreCase);
 
         private const string EventLogSource = "ChatT30P";
 
@@ -45,6 +54,207 @@ namespace ChatT30P.Controllers.Api
                 // ignore logging failures
             }
         }
+
+        private static SemaphoreSlim GetSessionSemaphore(string sessionFile)
+        {
+            var key = string.IsNullOrWhiteSpace(sessionFile) ? "__default" : sessionFile;
+            return SessionSemaphores.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
+        }
+
+        private static string NormalizePlatform(string platform) => (platform ?? string.Empty).Trim();
+
+        private static bool IsTelegramPlatform(string platform)
+            => NormalizePlatform(platform).Equals("Telegram", StringComparison.OrdinalIgnoreCase);
+
+        private static string GetTelegramApiIdOrNull() => string.IsNullOrWhiteSpace(TelegramApiId) ? null : TelegramApiId.Trim();
+        private static string GetTelegramApiHashOrNull() => string.IsNullOrWhiteSpace(TelegramApiHash) ? null : TelegramApiHash.Trim();
+
+        private static string GetTelegramSessionDir()
+        {
+            try
+            {
+                var baseDir = HttpContext.Current?.Server?.MapPath("~/App_Data") ?? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "App_Data");
+                var dir = Path.Combine(baseDir, "telegram_sessions");
+                Directory.CreateDirectory(dir);
+                return dir;
+            }
+            catch
+            {
+                var dir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "App_Data", "telegram_sessions");
+                Directory.CreateDirectory(dir);
+                return dir;
+            }
+        }
+
+        private static string GetTelegramSessionFilePath(string userId, string phone)
+        {
+            var safeUser = (userId ?? string.Empty).Replace("\\", "_").Replace("/", "_").Replace(":", "_");
+            var safePhone = (phone ?? string.Empty).Replace("+", string.Empty).Replace(" ", string.Empty);
+            return Path.Combine(GetTelegramSessionDir(), $"tg_{safeUser}_{safePhone}.session");
+        }
+
+        private static string ReadSessionTextFromFile(string path)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return null;
+                // Read file bytes and store as Base64 text in DB
+                var bytes = File.ReadAllBytes(path);
+                return bytes != null && bytes.Length > 0 ? Convert.ToBase64String(bytes) : null;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static void WriteSessionTextToFile(string path, string sessionText)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(path)) return;
+                if (string.IsNullOrWhiteSpace(sessionText))
+                {
+                    try { if (File.Exists(path)) File.Delete(path); } catch { }
+                    return;
+                }
+                Directory.CreateDirectory(Path.GetDirectoryName(path));
+                // Session text is stored as Base64
+                var bytes = Convert.FromBase64String(sessionText);
+                File.WriteAllBytes(path, bytes);
+            }
+            catch
+            {
+            }
+        }
+
+        private string GetAccountSession(string userId, string platform, string phone)
+        {
+            using (var cn = new SqlConnection(ConnectionString))
+            using (var cmd = cn.CreateCommand())
+            {
+                cmd.CommandText = @"SELECT TOP 1 [session] FROM accounts WHERE user_id=@user_id AND platform=@platform AND phone=@phone";
+                cmd.Parameters.Add("@user_id", SqlDbType.NVarChar, 128).Value = userId;
+                cmd.Parameters.Add("@platform", SqlDbType.NVarChar, 32).Value = platform;
+                cmd.Parameters.Add("@phone", SqlDbType.NVarChar, 64).Value = phone;
+                cn.Open();
+                return cmd.ExecuteScalar() as string;
+            }
+        }
+
+        private string GetTelegramCodeHash(string userId, string platform, string phone)
+        {
+            using (var cn = new SqlConnection(ConnectionString))
+            using (var cmd = cn.CreateCommand())
+            {
+                cmd.CommandText = @"SELECT TOP 1 telegram_code_hash FROM accounts WHERE user_id=@user_id AND platform=@platform AND phone=@phone";
+                cmd.Parameters.Add("@user_id", SqlDbType.NVarChar, 128).Value = userId;
+                cmd.Parameters.Add("@platform", SqlDbType.NVarChar, 32).Value = platform;
+                cmd.Parameters.Add("@phone", SqlDbType.NVarChar, 64).Value = phone;
+                cn.Open();
+                return cmd.ExecuteScalar() as string;
+            }
+        }
+
+        private void SaveChatsJson(string userId, string platform, string phone, string chatsJson)
+        {
+            using (var cn = new SqlConnection(ConnectionString))
+            using (var cmd = cn.CreateCommand())
+            {
+                cmd.CommandText = @"UPDATE accounts SET chats_json=@j WHERE user_id=@user_id AND platform=@platform AND phone=@phone";
+                cmd.Parameters.Add("@j", SqlDbType.NVarChar).Value = (object)chatsJson ?? (object)"[]";
+                cmd.Parameters.Add("@user_id", SqlDbType.NVarChar, 128).Value = userId;
+                cmd.Parameters.Add("@platform", SqlDbType.NVarChar, 32).Value = platform;
+                cmd.Parameters.Add("@phone", SqlDbType.NVarChar, 64).Value = phone;
+                cn.Open();
+                cmd.ExecuteNonQuery();
+            }
+        }
+
+        private void UpdateTelegramCodeState(string userId, string platform, string phone, string telegramCodeHash)
+        {
+            using (var cn = new SqlConnection(ConnectionString))
+            using (var cmd = cn.CreateCommand())
+            {
+                cmd.CommandText = @"
+UPDATE accounts
+SET telegram_code_hash=@h, telegram_code_created=GETDATE()
+WHERE user_id=@user_id AND platform=@platform AND phone=@phone";
+                cmd.Parameters.Add("@h", SqlDbType.NVarChar, 255).Value = (object)telegramCodeHash ?? DBNull.Value;
+                cmd.Parameters.Add("@user_id", SqlDbType.NVarChar, 128).Value = userId;
+                cmd.Parameters.Add("@platform", SqlDbType.NVarChar, 32).Value = platform;
+                cmd.Parameters.Add("@phone", SqlDbType.NVarChar, 64).Value = phone;
+                cn.Open();
+                cmd.ExecuteNonQuery();
+            }
+        }
+
+        private void UpdateTelegramSession(string userId, string platform, string phone, string session)
+        {
+            using (var cn = new SqlConnection(ConnectionString))
+            using (var cmd = cn.CreateCommand())
+            {
+                cmd.CommandText = @"
+UPDATE accounts
+SET [session]=@s
+WHERE user_id=@user_id AND platform=@platform AND phone=@phone";
+                cmd.Parameters.Add("@s", SqlDbType.NVarChar).Value = (object)session ?? DBNull.Value;
+                cmd.Parameters.Add("@user_id", SqlDbType.NVarChar, 128).Value = userId;
+                cmd.Parameters.Add("@platform", SqlDbType.NVarChar, 32).Value = platform;
+                cmd.Parameters.Add("@phone", SqlDbType.NVarChar, 64).Value = phone;
+                cn.Open();
+                cmd.ExecuteNonQuery();
+            }
+        }
+
+        private void EnsureAccountExists(string userId, string platform, string phone)
+        {
+            using (var cn = new SqlConnection(ConnectionString))
+            using (var cmd = cn.CreateCommand())
+            {
+                cmd.CommandText = "SELECT TOP 1 1 FROM accounts WHERE user_id=@user_id AND platform=@platform AND phone=@phone";
+                cmd.Parameters.Add("@user_id", SqlDbType.NVarChar, 128).Value = userId;
+                cmd.Parameters.Add("@platform", SqlDbType.NVarChar, 32).Value = platform;
+                cmd.Parameters.Add("@phone", SqlDbType.NVarChar, 64).Value = phone;
+                cn.Open();
+                var exists = cmd.ExecuteScalar() != null;
+                if (!exists) throw new InvalidOperationException("Account not found");
+            }
+        }
+
+        private void EnsureAccountsSessionColumn()
+        {
+            if (string.IsNullOrWhiteSpace(ConnectionString)) return;
+            try
+            {
+                using (var cn = new SqlConnection(ConnectionString))
+                using (var cmd = cn.CreateCommand())
+                {
+                    cmd.CommandText = @"
+IF OBJECT_ID('dbo.accounts', 'U') IS NOT NULL AND COL_LENGTH('dbo.accounts','session') IS NULL
+BEGIN
+    ALTER TABLE dbo.accounts ADD [session] NVARCHAR(MAX) NULL;
+END
+
+IF OBJECT_ID('dbo.accounts', 'U') IS NOT NULL AND COL_LENGTH('dbo.accounts','telegram_code_hash') IS NULL
+BEGIN
+    ALTER TABLE dbo.accounts ADD telegram_code_hash NVARCHAR(255) NULL;
+END
+
+IF OBJECT_ID('dbo.accounts', 'U') IS NOT NULL AND COL_LENGTH('dbo.accounts','telegram_code_created') IS NULL
+BEGIN
+    ALTER TABLE dbo.accounts ADD telegram_code_created DATETIME NULL;
+END";
+                    cn.Open();
+                    cmd.ExecuteNonQuery();
+                }
+            }
+            catch (Exception ex)
+            {
+                LogAdsPowerError("EnsureAccountsSessionColumn failed.", ex);
+            }
+        }
+
 
         [HttpPost]
         [Route("api/ChatAccounts/StartLoadChats")]
@@ -405,32 +615,27 @@ WHERE user_id = @user_id AND platform = @platform AND phone = @phone";
                     return Request.CreateErrorResponse(HttpStatusCode.Conflict, "Указанный номер телефона уже в базе");
             }
 
-            // Create AdsPower profile first. If AdsPower returns an error, do not write to DB.
-            string adsPowerId;
-            if (!string.IsNullOrWhiteSpace(AdsPowerBaseUrl) && !string.IsNullOrWhiteSpace(AdsPowerToken))
+            // Telegram accounts use MTProto login on the web server and do NOT require AdsPower profile.
+            // Other platforms still rely on AdsPower.
+            string adsPowerId = null;
+            if (!IsTelegramPlatform(item.Platform))
             {
-                var groupId = await EnsureAdsPowerGroupAsync(AdsPowerGroupName);
-                adsPowerId = await CreateAdsPowerProfileAsync(groupId, item);
-                if (string.IsNullOrEmpty(groupId) || string.IsNullOrEmpty(adsPowerId))
+                if (!string.IsNullOrWhiteSpace(AdsPowerBaseUrl) && !string.IsNullOrWhiteSpace(AdsPowerToken))
+                {
+                    var groupId = await EnsureAdsPowerGroupAsync(AdsPowerGroupName);
+                    adsPowerId = await CreateAdsPowerProfileAsync(groupId, item);
+                    if (string.IsNullOrEmpty(groupId) || string.IsNullOrEmpty(adsPowerId))
+                        return Request.CreateErrorResponse(HttpStatusCode.InternalServerError, "На сервере случилась критическая ошибка, обратитесь к администратору.");
+                }
+                else
+                {
                     return Request.CreateErrorResponse(HttpStatusCode.InternalServerError, "На сервере случилась критическая ошибка, обратитесь к администратору.");
-            }
-            else
-            {
-                return Request.CreateErrorResponse(HttpStatusCode.InternalServerError, "На сервере случилась критическая ошибка, обратитесь к администратору.");
+                }
             }
 
             using (var cn = new SqlConnection(ConnectionString))
             using (var cmd = cn.CreateCommand())
             {
-                // Cleanup: remove stale rows without AdsPower profile ID (older than 1 hour)
-                cmd.CommandText = @"
-DELETE FROM accounts
-WHERE ads_power_id IS NULL
-  AND TRY_CONVERT(datetime, [created]) < DATEADD(hour, -1, GETDATE())";
-
-                cn.Open();
-                cmd.ExecuteNonQuery();
-
                 cmd.CommandText = @"
 INSERT INTO accounts(user_id, platform, phone, status, chats_json, ads_power_id, created)
 VALUES(@user_id, @platform, @phone, @status, @chats_json, @ads_power_id, GETDATE())";
@@ -441,6 +646,7 @@ VALUES(@user_id, @platform, @phone, @status, @chats_json, @ads_power_id, GETDATE
                 cmd.Parameters.Add("@status", SqlDbType.Int).Value = item.Status;
                 cmd.Parameters.Add("@chats_json", SqlDbType.NVarChar).Value = (object)(item.ChatsJson ?? "[]") ?? DBNull.Value;
                 cmd.Parameters.Add("@ads_power_id", SqlDbType.NVarChar, 128).Value = (object)adsPowerId ?? DBNull.Value;
+                cn.Open();
 
                 try
                 {
@@ -491,6 +697,81 @@ VALUES(@user_id, @platform, @phone, @status, @chats_json, @ads_power_id, GETDATE
                 return Request.CreateResponse(HttpStatusCode.BadRequest);
 
             LogAdsPowerError($"StartLogin called. userId={userId}, platform={request.Platform}, phone={request.Phone}");
+
+            var normPlatform = NormalizePlatform(request.Platform);
+            var normPhone = NormalizePhone(request.Phone);
+
+            // Telegram: MTProto login flow (no AdsPower, no rpa_tasks)
+            if (IsTelegramPlatform(normPlatform))
+            {
+                var apiId = GetTelegramApiIdOrNull();
+                var apiHash = GetTelegramApiHashOrNull();
+                if (string.IsNullOrWhiteSpace(apiId) || string.IsNullOrWhiteSpace(apiHash))
+                    return Request.CreateErrorResponse(HttpStatusCode.InternalServerError, "Telegram API ключи не настроены на сервере.");
+
+                try
+                {
+                    EnsureAccountExists(userId, normPlatform, normPhone);
+                }
+                catch
+                {
+                    return Request.CreateErrorResponse(HttpStatusCode.BadRequest, "Аккаунт не найден.");
+                }
+
+                var sessionText = GetAccountSession(userId, normPlatform, normPhone);
+                var sessionFile = GetTelegramSessionFilePath(userId, normPhone);
+                var sessionSemaphore = GetSessionSemaphore(sessionFile);
+
+                // Send code. Persist session and phone_code_hash.
+                string codeHash = null;
+                await sessionSemaphore.WaitAsync();
+                try
+                {
+                    // Keep file-based session storage in sync with DB
+                    WriteSessionTextToFile(sessionFile, sessionText);
+
+                    using (var client = new Client(what =>
+                    {
+                        switch (what)
+                        {
+                            case "api_id": return apiId;
+                            case "api_hash": return apiHash;
+                            case "phone_number": return normPhone;
+                            case "session_pathname": return sessionFile;
+                            default: return null;
+                        }
+                    }))
+                    {
+                        try
+                        {
+                            // Ensure MTProto transport is connected before sending requests
+                            await client.ConnectAsync();
+                            // Force send code via Auth_SendCode
+                            var sent = await client.Auth_SendCode(normPhone, int.Parse(apiId), apiHash, new CodeSettings());
+                            try
+                            {
+                                dynamic d = sent;
+                                try { codeHash = d.phone_code_hash; }
+                                catch { try { codeHash = d.phoneCodeHash; } catch { try { codeHash = d.PhoneCodeHash; } catch { codeHash = null; } } }
+                            }
+                            catch { codeHash = null; }
+                        }
+                        catch
+                        {
+                            codeHash = null;
+                        }
+                    }
+
+                    // Persist session text back into DB (file content) after client disposed
+                    try { UpdateTelegramSession(userId, normPlatform, normPhone, ReadSessionTextFromFile(sessionFile)); } catch { }
+                }
+                finally
+                {
+                    sessionSemaphore.Release();
+                }
+                UpdateTelegramCodeState(userId, normPlatform, normPhone, codeHash);
+                return Request.CreateResponse(HttpStatusCode.OK, new { platform = normPlatform, phone = normPhone });
+            }
 
             
             // Read current row
@@ -833,11 +1114,10 @@ VALUES(@ads_power_id, @script_name, @value, @puppeteer)";
 
         [HttpPost]
         [Route("api/ChatAccounts/SubmitCode")]
-        public HttpResponseMessage SubmitCode(SubmitCodeRequest request)
+        public async Task<HttpResponseMessage> SubmitCode(SubmitCodeRequest request)
         {
             try
             {
-                // Placeholder: actual code submission requires Telegram/AdsPower workflow.
                 if (request == null || string.IsNullOrWhiteSpace(request.Platform) || string.IsNullOrWhiteSpace(request.Phone) || string.IsNullOrWhiteSpace(request.Code))
                     return Request.CreateResponse(HttpStatusCode.BadRequest);
 
@@ -847,6 +1127,157 @@ VALUES(@ads_power_id, @script_name, @value, @puppeteer)";
 
                 if (!Security.IsPaid)
                     return Request.CreateResponse((HttpStatusCode)402, "No active subscription");
+
+                var normPlatform = NormalizePlatform(request.Platform);
+                var normPhone = NormalizePhone(request.Phone);
+
+                if (IsTelegramPlatform(normPlatform))
+                {
+                    var apiId = GetTelegramApiIdOrNull();
+                    var apiHash = GetTelegramApiHashOrNull();
+                    if (string.IsNullOrWhiteSpace(apiId) || string.IsNullOrWhiteSpace(apiHash))
+                        return Request.CreateErrorResponse(HttpStatusCode.InternalServerError, "Telegram API ключи не настроены на сервере.");
+
+                    // normalize phone to match how it is stored in DB (without leading '+')
+                    normPhone = NormalizePhone(normPhone);
+                    var codeHash = GetTelegramCodeHash(userId, normPlatform, normPhone);
+                    var sessionText = GetAccountSession(userId, normPlatform, normPhone);
+                    var sessionFile = GetTelegramSessionFilePath(userId, normPhone);
+                    var sessionSemaphore = GetSessionSemaphore(sessionFile);
+
+                    if (string.IsNullOrWhiteSpace(codeHash))
+                        return Request.CreateErrorResponse(HttpStatusCode.Conflict, "Сначала выполните StartLogin для Telegram (код не запрошен).");
+
+                    await sessionSemaphore.WaitAsync();
+                    try
+                    {
+                        WriteSessionTextToFile(sessionFile, sessionText);
+
+                        using (var client = new Client(what =>
+                        {
+                            switch (what)
+                            {
+                                case "api_id": return apiId;
+                                case "api_hash": return apiHash;
+                                case "phone_number": return normPhone;
+                                case "session_pathname": return sessionFile;
+                                default: return null;
+                            }
+                        }))
+                        {
+                            await client.ConnectAsync();
+                            // Sign-in
+                            try
+                            {
+                                await client.Auth_SignIn(normPhone, codeHash, request.Code.Trim());
+                            }
+                            catch (TL.RpcException ex)
+                            {
+                                var msg = (ex.Message ?? string.Empty).ToUpperInvariant();
+                                if (msg.Contains("PHONE_CODE_EXPIRED") || msg.Contains("PHONE_CODE_INVALID"))
+                                {
+                                    UpdateTelegramCodeState(userId, normPlatform, normPhone, null);
+                                    return Request.CreateErrorResponse(HttpStatusCode.Conflict, "Код истёк или неверный. Запросите новый код и попробуйте снова.");
+                                }
+                                throw;
+                            }
+
+                            // Load dialogs (best-effort)
+                            var dialogs = await client.Messages_GetDialogs();
+
+                            var items = new List<object>();
+                            try
+                            {
+                                dynamic dd = dialogs;
+                                foreach (var d in dd.dialogs)
+                                {
+                                    string id = null;
+                                    string title = null;
+                                    string type = null;
+                                    string last = null;
+                                    try
+                                    {
+                                        var peer = d.peer;
+                                        if (peer is PeerUser pu)
+                                        {
+                                            id = "user:" + pu.user_id;
+                                            type = "user";
+                                            dynamic users = dd.users;
+                                            dynamic u = users[pu.user_id];
+                                            title = ("" + u.first_name + " " + u.last_name).Trim();
+                                        }
+                                        else if (peer is PeerChat pc)
+                                        {
+                                            id = "chat:" + pc.chat_id;
+                                            type = "chat";
+                                            dynamic chats = dd.chats;
+                                            dynamic c = chats[pc.chat_id];
+                                            title = (string)c.Title;
+                                        }
+                                        else if (peer is PeerChannel pch)
+                                        {
+                                            id = "channel:" + pch.channel_id;
+                                            type = "channel";
+                                            dynamic chats = dd.chats;
+                                            dynamic c = chats[pch.channel_id];
+                                            title = (string)c.Title;
+                                        }
+
+                                        // last message preview (best-effort)
+                                        try
+                                        {
+                                            if (d.top_message != null)
+                                            {
+                                                int topId = (int)d.top_message;
+                                                dynamic messages = dd.messages;
+                                                dynamic m = messages[topId];
+                                                try { last = (string)m.message; }
+                                                catch { try { last = (string)m.Message; } catch { } }
+                                            }
+                                        }
+                                        catch { }
+                                    }
+                                    catch { }
+
+                                    if (!string.IsNullOrWhiteSpace(id) && title != null)
+                                        items.Add(new { id, title, type, last });
+                                }
+                            }
+                            catch
+                            {
+                                // ignore dialogs parsing differences between TL versions
+                            }
+
+                            var chatsJson = JsonConvert.SerializeObject(items);
+
+                            SaveChatsJson(userId, normPlatform, normPhone, chatsJson);
+                            UpdateTelegramCodeState(userId, normPlatform, normPhone, null);
+                            try
+                            {
+                                using (var cn = new SqlConnection(ConnectionString))
+                                using (var cmd = cn.CreateCommand())
+                                {
+                                    cmd.CommandText = "UPDATE accounts SET status = 1 WHERE user_id=@user_id AND platform=@platform AND phone=@phone";
+                                    cmd.Parameters.Add("@user_id", SqlDbType.NVarChar, 128).Value = userId;
+                                    cmd.Parameters.Add("@platform", SqlDbType.NVarChar, 32).Value = normPlatform;
+                                    cmd.Parameters.Add("@phone", SqlDbType.NVarChar, 64).Value = normPhone;
+                                    cn.Open();
+                                    cmd.ExecuteNonQuery();
+                                }
+                            }
+                            catch { }
+                        }
+
+                        // Persist session text back into DB after client disposed (avoid file lock)
+                        try { UpdateTelegramSession(userId, normPlatform, normPhone, ReadSessionTextFromFile(sessionFile)); } catch { }
+                    }
+                    finally
+                    {
+                        sessionSemaphore.Release();
+                    }
+
+                    return Request.CreateResponse(HttpStatusCode.OK);
+                }
 
                 return Request.CreateResponse(HttpStatusCode.OK);
             }

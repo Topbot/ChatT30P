@@ -119,14 +119,14 @@
                            pattern="\d*"
                            maxlength="6"
                            autocomplete="one-time-code"
-                           data-ng-model="loginCode"
-                           data-ng-change="onLoginCodeChange()" />
+                           data-ng-model="$root.loginCode"
+                           data-ng-change="$root.onLoginCodeChange && $root.onLoginCodeChange()" />
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-default" data-dismiss="modal">Закрыть</button>
-                    <button type="button" class="btn btn-primary" data-ng-click="submitLoginCode()" data-ng-disabled="_submittingCode">
-                        <span data-ng-if="!_submittingCode">Отправить</span>
-                        <span data-ng-if="_submittingCode"><i class="fa fa-spinner fa-spin"></i></span>
+                    <button type="button" class="btn btn-primary" style="position:relative; z-index:1061;" data-ng-click="$event.preventDefault(); $event.stopPropagation(); $root.submitLoginCode && $root.submitLoginCode();" data-ng-disabled="$root._submittingCode || !$root.isLoginCodeValid || !$root.currentPlatform || !$root.currentPhone">
+                        <span data-ng-if="!$root._submittingCode">Отправить</span>
+                        <span data-ng-if="$root._submittingCode"><i class="fa fa-spinner fa-spin"></i></span>
                     </button>
                 </div>
             </div>
