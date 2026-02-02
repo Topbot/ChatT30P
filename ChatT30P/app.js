@@ -10,13 +10,15 @@ function goPay() {
 }
 
 (function () {
-    var app = angular.module("stats", ['ngRoute', 'ngAnimate', 'ngSanitize', 'ui-rangeSlider','angularjs-dropdown-multiselect']);
+    var app = angular.module("stats", ['ngRoute', 'ngAnimate', 'ngSanitize', 'ui-rangeSlider', 'angularjs-dropdown-multiselect']);
 
     var config = ["$routeProvider", function ($routeProvider) {
+        var viewVersion = (window.SiteVars && SiteVars.BuildVersion) ? SiteVars.BuildVersion : '3';
         $routeProvider
-            .when("/", { templateUrl: "views/chataccounts.html?v=0" })
-            .when("/chats", { templateUrl: "views/chats.html?v=1" })
-            .when("/users", { templateUrl: "views/users.html?v=1" })
+            .when("/", { templateUrl: "views/chataccounts.html?v=" + viewVersion })
+            .when("/chats", { templateUrl: "views/chats.html?v=" + viewVersion })
+            .when("/messages", { templateUrl: "views/messages.html?v=" + viewVersion })
+            .when("/users", { templateUrl: "views/users.html?v=" + viewVersion })
         .otherwise({ redirectTo: "/" });
     }];
     app.config(config);

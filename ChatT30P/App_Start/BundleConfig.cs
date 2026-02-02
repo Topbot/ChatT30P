@@ -19,6 +19,7 @@ public class BundleConfig
             .Include("~/Content/font-awesome.min.css")
             .Include("~/Content/app.css")
             .Include("~/Content/angular.rangeSlider.min.css")
+            .Include("~/Content/ui-select.min.css")
             .Include("~/Content/flags.css")
           );
 
@@ -30,10 +31,12 @@ public class BundleConfig
             .Include("~/Scripts/angular-route.min.js")
             .Include("~/Scripts/angular-animate.min.js")
             .Include("~/Scripts/angular-sanitize.min.js")
+            .Include("~/scripts/ui-select.min.js")
             .Include("~/app.min.js")
             .Include("~/controllers/common.js")
             .Include("~/controllers/chataccounts.js")
             .Include("~/controllers/chats.js")
+            .Include("~/controllers/messages.js")
             .Include("~/controllers/users.js")
             .Include("~/scripts/bootstrap.js")
             .Include("~/scripts/moment.js")

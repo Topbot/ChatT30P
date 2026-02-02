@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 
 namespace Core
 {
@@ -91,6 +91,7 @@ namespace Core
                     //sbSiteVars.Append("BlogInstanceId: '" + Blog.CurrentInstance.Id + "',");
                     //sbSiteVars.Append("AbsoluteWebRoot:  '" + Utils.AbsoluteWebRoot + "',");
                     sbSiteVars.Append("GenericPageSize:  '20',");
+                    sbSiteVars.Append("BuildVersion: '" + typeof(ResourceHandler).Assembly.GetName().Version + "',");
                     //sbSiteVars.Append("GalleryFeedUrl:  '" + BlogSettings.Instance.GalleryFeedUrl + "',");
                     //sbSiteVars.Append("IsPrimary: '" + Blog.CurrentInstance.IsPrimary + "',");
                     //sbSiteVars.Append("Version: 'BlogEngine.NET " + BlogSettings.Instance.Version() + "'");

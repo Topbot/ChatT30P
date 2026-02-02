@@ -19,10 +19,10 @@
             $interval.cancel(loginTimerIntervalPromise);
             loginTimerIntervalPromise = null;
         }
-    }
-    if (loginTimerDomIntervalId) {
-        clearInterval(loginTimerDomIntervalId);
-        loginTimerDomIntervalId = null;
+        if (loginTimerDomIntervalId) {
+            clearInterval(loginTimerDomIntervalId);
+            loginTimerDomIntervalId = null;
+        }
     }
 
     $scope.onLoginCodeChange = function () {
@@ -367,6 +367,104 @@
     $rootScope.currentPhone = $rootScope.currentPhone || null;
     $rootScope._submittingCode = $rootScope._submittingCode || false;
 
+    $rootScope.availableChats = $rootScope.availableChats || [];
+    $rootScope.selectedChatIds = $rootScope.selectedChatIds || [];
+    $rootScope.selectedChatObjects = $rootScope.selectedChatObjects || [];
+    $rootScope.selectedChatMap = $rootScope.selectedChatMap || {};
+    $rootScope.onlyChatType = false;
+    $rootScope.chatTypeFilter = function (item) {
+        if (!$rootScope.onlyChatType) return true;
+        return item && item.type === 'chat';
+    };
+    $rootScope._savingChatSelection = false;
+    $rootScope._refreshingChats = false;
+    $rootScope.currentChatsAccount = $rootScope.currentChatsAccount || null;
+    $rootScope.updateSelectedChatMap = function (ids) {
+        var map = $rootScope.selectedChatMap || {};
+        Object.keys(map).forEach(function (key) { delete map[key]; });
+        for (var i = 0; i < ids.length; i++) map[ids[i]] = true;
+        $rootScope.selectedChatMap = map;
+    };
+    $rootScope.syncSelectedChatObjects = function () {
+        var ids = $rootScope.selectedChatIds || [];
+        $rootScope.updateSelectedChatMap(ids);
+        var map = $rootScope.selectedChatMap || {};
+        var arr = [];
+        for (var j = 0; j < ($rootScope.availableChats || []).length; j++) {
+            var c = $rootScope.availableChats[j];
+            if (c && map[c.id]) arr.push(c);
+        }
+        $rootScope.selectedChatObjects = arr;
+    };
+
+    $rootScope.toggleChatSelection = function () {
+        var map = $rootScope.selectedChatMap || {};
+        var ids = [];
+        for (var id in map) {
+            if (map.hasOwnProperty(id) && map[id]) ids.push(id);
+        }
+        $rootScope.selectedChatIds = ids;
+        $rootScope.syncSelectedChatObjects();
+    };
+
+    function updateAvailableChatsFromJson(json) {
+        var list = [];
+        if (json) {
+            try {
+                var parsed = angular.fromJson(json);
+                if (Array.isArray(parsed)) list = parsed;
+            } catch (e) {
+            }
+        }
+        $rootScope.availableChats = list;
+        $rootScope.syncSelectedChatObjects();
+    }
+
+    $rootScope.refreshChatsFromAccount = function () {
+        return $scope.load().then(function (items) {
+            var current = $rootScope.currentChatsAccount;
+            if (!current) return;
+            var platform = current.Platform || current.platform;
+            var phone = current.Phone || current.phone;
+            var found = null;
+            if (items && items.length) {
+                for (var i = 0; i < items.length; i++) {
+                    var it = items[i];
+                    var p = it.Platform || it.platform;
+                    var ph = it.Phone || it.phone;
+                    if (p === platform && ph === phone) {
+                        found = it;
+                        break;
+                    }
+                }
+            }
+            if (found) {
+                $rootScope.currentChatsAccount = found;
+                updateAvailableChatsFromJson(found.ChatsJson || found.chats_json);
+            }
+        });
+    };
+
+    $rootScope.clearChatSelection = function () {
+        $rootScope.selectedChatIds = [];
+        $rootScope.selectedChatObjects = [];
+        $rootScope.updateSelectedChatMap([]);
+    };
+
+    $rootScope.selectAllChats = function () {
+        var all = ($rootScope.availableChats || []).map(function (c) { return c.id; });
+        $rootScope.selectedChatIds = all;
+        $rootScope.selectedChatObjects = ($rootScope.availableChats || []).slice(0);
+        $rootScope.updateSelectedChatMap(all);
+    };
+
+    $rootScope.truncateChatLast = function (text) {
+        if (!text) return '';
+        var s = '' + text;
+        if (s.length <= 100) return s;
+        return s.substring(0, 100) + '…';
+    };
+
     $scope.isLoginCodeValid = false;
     $scope.onLoginCodeChange = function () {
         // modal is bound to $rootScope.loginCode
@@ -525,29 +623,116 @@
 
     $scope.loadChats = function (item) {
         if (!item) return;
-        if (item._loadingChats) return;
-        item._loadingChats = true;
+        $rootScope.currentChatsAccount = item;
 
+        // parse chats_json into available list
+        var json = item.ChatsJson || item.chats_json;
+        var list = [];
+        if (json) {
+            try {
+                var arr = angular.fromJson(json);
+                if (Array.isArray(arr)) list = arr;
+            } catch (e) { }
+        }
+        $rootScope.availableChats = list;
+
+        // load current selections
+        var phone = item.Phone || item.phone;
+        var url = '/api/ChatAccounts/MonitoringChats';
+        if (phone) url += '?phone=' + encodeURIComponent(phone);
+        $http.get(url).then(function (r) {
+            $rootScope.selectedChatIds = r.data || [];
+            $rootScope.syncSelectedChatObjects();
+        }, function () {
+            $rootScope.selectedChatIds = [];
+            $rootScope.selectedChatObjects = [];
+        }).finally(function () {
+            if (window.$) {
+                try { $(".modal").modal('hide'); $('.modal-backdrop').remove(); $('body').removeClass('modal-open'); } catch (e) {}
+                $timeout(function () {
+                    var $m = $('#modal-select-chats');
+                    try { $m.appendTo('body'); } catch (e) {}
+                    $m.modal({ backdrop: true, keyboard: true, show: true });
+                }, 50);
+            }
+        });
+    };
+
+    $rootScope.refreshChatsList = function () {
+        var item = $rootScope.currentChatsAccount;
+        if (!item) return;
+        if ($rootScope._refreshingChats) return;
+        $rootScope._refreshingChats = true;
         var payload = {
             Platform: item.Platform || item.platform,
             Phone: item.Phone || item.phone
         };
-
         $http.post('/api/ChatAccounts/StartLoadChats', payload).then(function (r) {
-            // server will enqueue rpa_task and wait up to 5 minutes; when returns OK we refresh list
-            if (r && r.status === 202) {
-                var warn = 'Задача на загрузку чатов поставлена в очередь, но не была обработана в отведённое время. Проверьте позже.';
-                if (window.toastr && toastr.warning) toastr.warning(warn); else alert(warn);
+            if (Array.isArray(r.data)) {
+                $rootScope.availableChats = r.data;
+                $rootScope.syncSelectedChatObjects();
+            } else if (r && r.data && r.data.chats) {
+                $rootScope.availableChats = r.data.chats;
+                $rootScope.syncSelectedChatObjects();
+            } else {
+                $rootScope.refreshChatsFromAccount();
+                if (r && r.status === 202) {
+                    $timeout(function () { $rootScope.refreshChatsFromAccount(); }, 5000);
+                }
             }
-            $scope.load().finally(function () { item._loadingChats = false; });
         }, function (err) {
-            var msg = 'Не удалось запустить загрузку чатов.';
-            if (err && (err.status === 0 || err.status === -1)) msg = 'Ошибка соединения с сервером.';
-            else if (err && err.status === 402) msg = 'Нет активной подписки.';
-            else if (err && err.status === 409) msg = 'Задача загрузки чатов уже находится в очереди.';
-            else if (err && err.data && (err.data.Message || err.data.message)) msg = err.data.Message || err.data.message;
+            if (err && err.data && err.data.Code === 'AUTH_KEY_UNREGISTERED') {
+                if (window.$) {
+                    try { $('#modal-select-chats').modal('hide'); } catch (e) { }
+                }
+                if (typeof $scope.reload === 'function') {
+                    $scope.reload();
+                } else if (typeof $scope.load === 'function') {
+                    $scope.load();
+                }
+                if (window.toastr && toastr.warning) {
+                    toastr.warning(err.data.Message || 'Сессия невалидна. Требуется повторный вход.');
+                }
+                return;
+            }
+            if (err && err.status === 409) {
+                if (window.toastr && toastr.info) {
+                    toastr.info('Обновление уже выполняется. Список появится после завершения.');
+                }
+                $timeout(function () { $rootScope.refreshChatsFromAccount(); }, 5000);
+                return;
+            }
+            var msg = 'Не удалось обновить список чатов.';
+            if (err && err.data && (err.data.Message || err.data.message)) msg = err.data.Message || err.data.message;
             if (window.toastr && toastr.error) toastr.error(msg); else alert(msg);
-            item._loadingChats = false;
+        }).finally(function () {
+            $rootScope._refreshingChats = false;
+        });
+    };
+
+    $rootScope.saveChatSelection = function () {
+        if ($rootScope._savingChatSelection) return;
+        $rootScope._savingChatSelection = true;
+        var map = $rootScope.selectedChatMap || {};
+        var ids = [];
+        for (var id in map) {
+            if (map.hasOwnProperty(id) && map[id]) ids.push(id);
+        }
+        $rootScope.selectedChatIds = ids;
+        var account = $rootScope.currentChatsAccount || {};
+        var payload = {
+            ChatIds: ids,
+            Platform: account.Platform || account.platform,
+            Phone: account.Phone || account.phone
+        };
+        $http.post('/api/ChatAccounts/MonitoringChats', payload).then(function () {
+            if (window.$) { $('#modal-select-chats').modal('hide'); }
+        }, function (err) {
+            var msg = 'Не удалось сохранить выбор чатов.';
+            if (err && err.data && (err.data.Message || err.data.message)) msg = err.data.Message || err.data.message;
+            if (window.toastr && toastr.error) toastr.error(msg); else alert(msg);
+        }).finally(function () {
+            $rootScope._savingChatSelection = false;
         });
     };
 

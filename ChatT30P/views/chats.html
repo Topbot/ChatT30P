@@ -4,13 +4,78 @@
     <div class="container admin-views-main" data-ng-controller="ChatsController">
         <div class="page-header clearfix">
             <h2 class="page-title pull-left">Чаты</h2>
+            <div class="pull-right" style="margin-top:10px;">
+                <button class="btn btn-default" data-ng-click="refresh()" data-ng-disabled="_loading">
+                    <span data-ng-if="!_loading">Обновить</span>
+                    <span data-ng-if="_loading"><i class="fa fa-spinner fa-spin"></i></span>
+                </button>
+            </div>
         </div>
 
         <div class="alert alert-warning" data-ng-if="!isPaid">
             Для доступа к разделу требуется оплата.
         </div>
         <div data-ng-if="isPaid">
-            <div class="alert alert-info">Раздел в разработке.</div>
+            <div class="row" style="margin-bottom: 10px;">
+                <div class="col-md-4">
+                    <input type="text" class="form-control" placeholder="Поиск по названию чата..." data-ng-model="$parent.searchText" />
+                </div>
+                <div class="col-md-3">
+                    <input type="date" class="form-control" data-ng-model="periodStart" data-ng-change="refresh()" />
+                </div>
+                <div class="col-md-3">
+                    <input type="date" class="form-control" data-ng-model="periodEnd" data-ng-change="refresh()" />
+                </div>
+                <div class="col-md-2">
+                    <div class="btn-group" style="width:100%;">
+                        <button class="btn btn-default" data-ng-click="setQuickRange('today')">день</button>
+                        <button class="btn btn-default" data-ng-click="setQuickRange('week')">неделя</button>
+                        <button class="btn btn-default" data-ng-click="setQuickRange('month')">месяц</button>
+                        <button class="btn btn-default" data-ng-click="setQuickRange('2months')">2 месяца</button>
+                    </div>
+                </div>
+                <div class="col-md-2 text-right">
+                    <div class="text-muted" style="margin-top: 7px;">
+                        Всего сообщений: <strong>{{totalMessages}}</strong>
+                    </div>
+                </div>
+            </div>
+
+            <table class="table table-bordered table-striped table-hover table-responsive">
+                <thead>
+                    <tr>
+                        <th data-ng-click="setSort('Title')" class="cursor-pointer">
+                            Название чата
+                            <span data-ng-if="sortField === 'Title'">{{sortReverse ? '▼' : '▲'}}</span>
+                        </th>
+                        <th data-ng-click="setSort('MessageCount')" class="cursor-pointer" style="width: 160px;">
+                            Сообщений
+                            <span data-ng-if="sortField === 'MessageCount'">{{sortReverse ? '▼' : '▲'}}</span>
+                        </th>
+                        <th style="width: 220px;">Комментарий</th>
+                        <th style="width: 120px;">&nbsp;</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr data-ng-repeat="item in items | filter:chatFilter | orderBy:sortField:sortReverse">
+                        <td>
+                            <a class="cursor-pointer" data-ng-click="openMessages(item)">{{item.Title}}</a>
+                        </td>
+                        <td>{{item.MessageCount}}</td>
+                        <td>
+                            <input type="text" class="form-control" data-ng-model="item.Comment" data-ng-blur="saveComment(item)" />
+                        </td>
+                        <td>
+                            <button class="btn btn-danger btn-xs" data-ng-click="remove(item)" data-ng-disabled="item._deleting">
+                                Удалить
+                            </button>
+                        </td>
+                    </tr>
+                    <tr data-ng-if="!items || items.length === 0">
+                        <td colspan="4" class="text-muted">Список чатов пуст.</td>
+                    </tr>
+                </tbody>
+            </table>
         </div>
     </div>
 </div>

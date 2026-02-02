@@ -39,6 +39,55 @@
                     <button type="button" class="close" data-dismiss="modal" aria-hidden="true"><i class="fa fa-user"></i></button>
                     <h4 class="modal-title">Вам необходимо залогиниться для продолжения</h4>
                 </div>
+    <div id="modal-select-chats" class="modal fade" style="z-index:1062;">
+        <div class="modal-dialog modal-select-chats">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <button type="button" class="close" data-dismiss="modal" aria-hidden="true">&times;</button>
+                    <h4 class="modal-title">Выбор чатов для мониторинга</h4>
+                </div>
+                <div class="modal-body chat-select-modal-body">
+                    <div class="chat-select-actions">
+                    <input type="text" class="form-control" placeholder="Фильтр по названию..." style="display:inline-block;width:260px;margin-right:10px;" data-ng-model="$root.chatFilterText" />
+                    <button type="button" class="btn btn-default" data-dismiss="modal">Закрыть</button>
+                    <button type="button" class="btn btn-default" data-ng-click="$root.clearChatSelection && $root.clearChatSelection()">Очистить выбор</button>
+                    <button type="button" class="btn btn-default" data-ng-click="$root.selectAllChats && $root.selectAllChats()">Выбрать все</button>
+                    <button type="button" class="btn btn-info" data-ng-click="$root.refreshChatsList && $root.refreshChatsList()" data-ng-disabled="$root._refreshingChats">
+                        <span data-ng-if="!$root._refreshingChats">Обновить список чатов</span>
+                        <span data-ng-if="$root._refreshingChats"><i class="fa fa-spinner fa-spin"></i></span>
+                    </button>
+                    <button type="button" class="btn btn-primary" data-ng-click="$root.saveChatSelection && $root.saveChatSelection()" data-ng-disabled="$root._savingChatSelection">
+                        <span data-ng-if="!$root._savingChatSelection">Сохранить выбор</span>
+                        <span data-ng-if="$root._savingChatSelection"><i class="fa fa-spinner fa-spin"></i></span>
+                    </button>
+                    </div>
+                    <div class="chat-select-body">
+                        <div class="text-muted" style="margin-bottom:10px;">
+                            Выберите чаты, сообщения в которых будут мониториться.
+                            <label style="font-weight: normal; margin-left: 10px;">
+                                <input type="checkbox" data-ng-model="$root.onlyChatType" /> оставлять только чаты
+                            </label>
+                        </div>
+                        <div data-ng-if="!$root.availableChats || $root.availableChats.length === 0" class="text-muted">
+                            Список чатов пуст. Нажмите «Обновить список чатов».
+                        </div>
+                        <div data-ng-if="$root.availableChats && $root.availableChats.length > 0" class="chat-select-list">
+                            <div class="chat-select-items">
+                                <label class="chat-select-item" data-ng-repeat="c in $root.availableChats | filter:{ title: $root.chatFilterText } | filter:$root.chatTypeFilter">
+                                    <input type="checkbox"
+                                           data-ng-change="$root.toggleChatSelection(c)"
+                                           data-ng-model="$root.selectedChatMap[c.id]" />
+                                    <i class="fa fa-comments" data-ng-if="c.type === 'chat'"></i>
+                                    <span>{{c.title}}</span>
+                                    <small class="text-muted" data-ng-if="c.last"> — {{$root.truncateChatLast(c.last)}}</small>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
                 <div class="modal-body modal-logfile">
                     Зарегистрировавшись на сайте, вы сможете продолжить работу с сервисом мониторинга закрытых домовых чатов.
                     <br />

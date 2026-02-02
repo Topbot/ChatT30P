@@ -18,6 +18,15 @@ input[type=file] { cursor: pointer; }
 label.error { color: #1288b9; }
 .modal { overflow-y: auto; }
 .modal-content { overflow: hidden; }
+.modal-dialog.modal-select-chats { width: 90%; max-width: 1000px; height: 100vh; margin: 0 auto; }
+.modal-dialog.modal-select-chats .modal-content { height: 100%; display: flex; flex-direction: column; }
+.modal-dialog.modal-select-chats .modal-body { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+.modal-dialog.modal-select-chats .chat-select-actions { margin-bottom: 10px; flex: 0 0 auto; }
+.modal-dialog.modal-select-chats .chat-select-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; }
+.modal-dialog.modal-select-chats .chat-select-list { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.modal-dialog.modal-select-chats .chat-select-items { flex: 1 1 auto; overflow-y: auto; border: 1px solid #ccc; border-radius: 4px; padding: 10px; }
+.modal-dialog.modal-select-chats .chat-select-item { display: flex; align-items: center; gap: 8px; margin: 0 0 6px 0; font-weight: normal; }
+.modal-dialog.modal-select-chats .chat-select-item input[type="checkbox"] { margin: 0; }
 .fa-spinner { font-size: 0.8em !important; }
 .show-important { display: block !important; }
 .hr-sm { margin-top: 10px; margin-bottom: 10px; }
@@ -180,6 +189,15 @@ label { font-size: 13px; font-weight: normal; }
 .rtl .btn-toolbar > .btn + .btn, .rtl .btn-toolbar > .btn-group + .btn, .rtl .btn-toolbar > .btn + .btn-group, .rtl .btn-toolbar > .btn-group + .btn-group { margin-left: 0; margin-right: 4px !important; }
 .rtl .panel-title > a { font-family: Tahoma; font-weight: bold; font-size: 12px; }
 .rtl .admin-views-dashboard .img-gallery { margin-right: 0; margin-left: 10px; }
+.message-row td { position: relative; }
+.message-actions { position: absolute; right: 6px; top: 6px; opacity: 0; transition: opacity 0.2s ease; }
+.message-row:hover .message-actions { opacity: 1; }
+.message-text { padding-right: 70px; }
+.sentiment-positive { color: #5cb85c; }
+.sentiment-negative { color: #d9534f; }
+.sentiment-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-left: 6px; vertical-align: middle; }
+.sentiment-dot-positive { background-color: #5cb85c; }
+.sentiment-dot-negative { background-color: #d9534f; }
 
 @media screen and (min-width:1920px) {
     .text-ellipsis { max-width: 500px !important; }
