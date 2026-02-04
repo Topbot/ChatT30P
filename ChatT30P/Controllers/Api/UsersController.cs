@@ -24,6 +24,12 @@ namespace ChatT30P.Controllers.Api
             public bool IsAdmin { get; set; }
         }
 
+        public class UserPasswordDto
+        {
+            public string UserName { get; set; }
+            public string NewPassword { get; set; }
+        }
+
         [HttpGet]
         [Route("api/Users")]
         public IEnumerable<UserDto> Get()
@@ -115,6 +121,37 @@ namespace ChatT30P.Controllers.Api
             }
             catch
             {
+            }
+
+            return Ok();
+        }
+
+        [HttpPut]
+        [Route("api/Users/Password")]
+        public IHttpActionResult UpdatePassword(UserPasswordDto dto)
+        {
+            if (!Security.IsAuthenticated)
+                return Unauthorized();
+
+            if (!IsAdmin())
+                return StatusCode(HttpStatusCode.Forbidden);
+
+            if (dto == null || string.IsNullOrWhiteSpace(dto.UserName) || string.IsNullOrWhiteSpace(dto.NewPassword))
+                return BadRequest();
+
+            var user = Membership.GetUser(dto.UserName);
+            if (user == null)
+                return NotFound();
+
+            try
+            {
+                var temp = user.ResetPassword();
+                if (!user.ChangePassword(temp, dto.NewPassword))
+                    return BadRequest();
+            }
+            catch
+            {
+                return InternalServerError();
             }
 
             return Ok();

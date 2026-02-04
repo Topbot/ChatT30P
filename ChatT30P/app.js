@@ -18,6 +18,7 @@ function goPay() {
             .when("/", { templateUrl: "views/chataccounts.html?v=" + viewVersion })
             .when("/chats", { templateUrl: "views/chats.html?v=" + viewVersion })
             .when("/messages", { templateUrl: "views/messages.html?v=" + viewVersion })
+            .when("/problems", { templateUrl: "views/problems.html?v=" + viewVersion })
             .when("/users", { templateUrl: "views/users.html?v=" + viewVersion })
         .otherwise({ redirectTo: "/" });
     }];

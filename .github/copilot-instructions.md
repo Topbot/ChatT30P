@@ -2,8 +2,8 @@
 
 ## General Guidelines
 - First general instruction
-- Follow naming conventions
 - Second general instruction
+- Follow naming conventions
 
 ## Code Style
 - Use specific formatting rules
@@ -14,3 +14,6 @@
 - In the ChatT30P project, use AdsPower for managing browser profiles to automate logins for Telegram, WhatsApp, and Max. Ensure that the AdsPower URL is accessible from the server where the application is running (do not use localhost if the application is on a remote server). Configuration settings for AdsPower are located in Web.config (BaseUrl, Token).
 - Do not add `await client.LoginUserIfNeeded();` in this codebase.
 - Use `megagroup == true` (not `forum`) to detect groups when determining type/topic handling.
+- Do not save `isMegagroup` and `isForum` in `chats_json` for this codebase.
+- Compatibility with the old message log format is not needed.
+- MTProto session files must never be deleted; on errors, just inform/log the user.

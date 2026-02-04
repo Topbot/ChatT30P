@@ -1,4 +1,4 @@
-using Core;
+﻿using Core;
 
 namespace Account
 {
@@ -62,8 +62,14 @@ namespace Account
         {
             // always set to false
             e.Authenticated = false;
+            var rememberMe = LoginUser.RememberMeSet;
+            var rememberControl = LoginUser.FindControl("RememberMe") as CheckBox;
+            if (rememberControl != null)
+            {
+                rememberMe = rememberControl.Checked;
+            }
 
-            Security.AuthenticateUser(LoginUser.UserName, LoginUser.Password, LoginUser.RememberMeSet);
+            Security.AuthenticateUser(LoginUser.UserName, LoginUser.Password, rememberMe);
         }
 
         #endregion

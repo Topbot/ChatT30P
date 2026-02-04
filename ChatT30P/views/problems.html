@@ -1,0 +1,118 @@
+﻿<div id="wrap">
+    <div data-ng-include="" src="'views/shared/_nav.html'"></div>
+
+    <div class="container admin-views-main" data-ng-controller="ProblemsController">
+        <div class="page-header clearfix">
+            <h2 class="page-title pull-left">Проблемы</h2>
+            <div class="pull-right" style="margin-top:10px;">
+                <button class="btn btn-default" data-ng-click="refresh()" data-ng-disabled="_loading">
+                    <span data-ng-if="!_loading">Обновить</span>
+                    <span data-ng-if="_loading"><i class="fa fa-spinner fa-spin"></i></span>
+                </button>
+            </div>
+        </div>
+
+        <div class="row" style="margin-bottom: 10px;">
+            <div class="col-md-4">
+                <input type="text" class="form-control" placeholder="Поиск по проблемам..." data-ng-model="searchText" />
+            </div>
+            <div class="col-md-8 text-right">
+                <button class="btn btn-default" data-ng-click="showNotifyModal()">Уведомлять на почту</button>
+                <button class="btn btn-default" data-ng-click="showAddModal()">Добавить проблемы</button>
+                <button class="btn btn-primary" data-ng-click="saveSelection()" data-ng-disabled="_saving">
+                    <span data-ng-if="!_saving">Сохранить выбор</span>
+                    <span data-ng-if="_saving"><i class="fa fa-spinner fa-spin"></i></span>
+                </button>
+            </div>
+        </div>
+
+<div id="modal-notify-problem" class="modal fade" tabindex="-1" role="dialog">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button type="button" class="close" data-dismiss="modal" aria-hidden="true">×</button>
+                <h4 class="modal-title">Уведомление о проблемах</h4>
+            </div>
+            <div class="modal-body">
+                <div class="text-muted" style="margin-bottom:10px;">
+                    Выберете проблемы о возникновении которых вы хотите получать уведомление на почту.
+                </div>
+                <div data-ng-if="notifyItems.length === 0" class="text-muted">
+                    Нет выбранных проблем для уведомлений.
+                </div>
+                <div data-ng-if="notifyItems.length > 0" class="problems-select-list">
+                    <div class="problems-select-items">
+                        <div class="problems-select-item" data-ng-repeat="item in notifyItems">
+                            <label class="problems-select-main">
+                                <input type="checkbox" data-ng-model="notifyMap[item.ProblemId]" />
+                                <span>{{item.Title}}</span>
+                                <small class="text-muted" data-ng-if="item.Description"> — {{item.Description}}</small>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-default" data-dismiss="modal">Отмена</button>
+                <button type="button" class="btn btn-primary" data-ng-click="saveNotify()" data-ng-disabled="_savingNotify">
+                    <span data-ng-if="!_savingNotify">Сохранить</span>
+                    <span data-ng-if="_savingNotify"><i class="fa fa-spinner fa-spin"></i></span>
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+        <div class="text-muted" style="margin-bottom: 10px;">
+            Выберите из списка проблемы для отслеживания.
+        </div>
+
+        <div data-ng-if="!items || items.length === 0" class="text-muted">
+            Список проблем пуст.
+        </div>
+        <div data-ng-if="items && items.length > 0" class="problems-select-list">
+            <div class="problems-select-items">
+                <div class="problems-select-item" data-ng-repeat="item in items | filter:problemFilter">
+                    <label class="problems-select-main">
+                        <input type="checkbox" data-ng-model="selectedMap[item.ProblemId]" />
+                        <span>{{item.Title}}</span>
+                        <small class="text-muted" data-ng-if="item.Description"> — {{item.Description}}</small>
+                    </label>
+                    <button class="btn btn-xs btn-link text-danger" title="Удалить" data-ng-click="remove(item)">
+                        <i class="fa fa-trash"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="footer" data-ng-include src="'views/shared/_footer.html?v=2'"></div>
+
+<div id="modal-add-problem" class="modal fade" tabindex="-1" role="dialog">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button type="button" class="close" data-dismiss="modal" aria-hidden="true">×</button>
+                <h4 class="modal-title">Добавить проблему</h4>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Название</label>
+                    <input type="text" class="form-control" data-ng-model="newProblemTitle" />
+                </div>
+                <div class="form-group">
+                    <label>Описание</label>
+                    <textarea class="form-control" rows="4" data-ng-model="newProblemDescription"></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-default" data-dismiss="modal">Отмена</button>
+                <button type="button" class="btn btn-primary" data-ng-click="addProblem()" data-ng-disabled="_adding">
+                    <span data-ng-if="!_adding">Добавить</span>
+                    <span data-ng-if="_adding"><i class="fa fa-spinner fa-spin"></i></span>
+                </button>
+            </div>
+        </div>
+    </div>
+</div>

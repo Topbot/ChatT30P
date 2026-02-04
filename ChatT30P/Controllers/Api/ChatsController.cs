@@ -10,12 +10,15 @@ using System.Net.Http;
 using System.Web;
 using System.Web.Http;
 using Newtonsoft.Json;
+using OfficeOpenXml;
+using OfficeOpenXml.Drawing.Chart;
 
 namespace ChatT30P.Controllers.Api
 {
     public class ChatsController : ApiController
     {
         private static string ConnectionString => ConfigurationManager.ConnectionStrings["chatConnectionString"]?.ConnectionString;
+        private const string TopicSuffix = ":topic:";
 
         private class ChatRow
         {
@@ -24,6 +27,11 @@ namespace ChatT30P.Controllers.Api
             public string Phone { get; set; }
             public string Comment { get; set; }
             public int MessageCount { get; set; }
+            public int PositiveCount { get; set; }
+            public int NeutralCount { get; set; }
+            public int NegativeCount { get; set; }
+            public int UnknownCount { get; set; }
+            public string AvatarUrl { get; set; }
         }
 
         private class ChatMessageRow
@@ -33,7 +41,10 @@ namespace ChatT30P.Controllers.Api
             public string DateText { get; set; }
             public long DateTicks { get; set; }
             public string Sender { get; set; }
+            public string SenderId { get; set; }
             public string Text { get; set; }
+            public int ReplyToMessageId { get; set; }
+            public string ReplyText { get; set; }
             public int Views { get; set; }
             public int Replies { get; set; }
             public string Sentiment { get; set; }
@@ -41,7 +52,7 @@ namespace ChatT30P.Controllers.Api
 
         [HttpGet]
         [Route("api/Chats/Messages")]
-        public HttpResponseMessage GetMessages([FromUri] string chatId, [FromUri] DateTime? start = null, [FromUri] DateTime? end = null)
+        public HttpResponseMessage GetMessages([FromUri] string chatId, [FromUri] DateTime? start = null, [FromUri] DateTime? end = null, [FromUri] string q = null)
         {
             if (string.IsNullOrWhiteSpace(ConnectionString))
                 return Request.CreateResponse(HttpStatusCode.InternalServerError);
@@ -54,13 +65,13 @@ namespace ChatT30P.Controllers.Api
                 return Request.CreateResponse(HttpStatusCode.BadRequest);
 
             var range = NormalizeRange(start, end);
-            var result = LoadMessages(chatId, range.Start, range.End);
+            var result = LoadMessages(chatId, range.Start, range.End, q);
             return Request.CreateResponse(HttpStatusCode.OK, result);
         }
 
         [HttpGet]
         [Route("api/Chats/MessagesExport")]
-        public HttpResponseMessage ExportMessages([FromUri] string chatId, [FromUri] DateTime? start = null, [FromUri] DateTime? end = null)
+        public HttpResponseMessage ExportMessages([FromUri] string chatId, [FromUri] DateTime? start = null, [FromUri] DateTime? end = null, [FromUri] string mode = null)
         {
             if (string.IsNullOrWhiteSpace(ConnectionString))
                 return Request.CreateResponse(HttpStatusCode.InternalServerError);
@@ -73,19 +84,35 @@ namespace ChatT30P.Controllers.Api
                 return Request.CreateResponse(HttpStatusCode.BadRequest);
 
             var range = NormalizeRange(start, end);
-            var rows = LoadMessages(chatId, range.Start, range.End);
+            var rows = LoadMessages(chatId, range.Start, range.End, null);
             var title = LoadChatTitle(userId, chatId);
+            if (string.Equals(mode, "charts", StringComparison.OrdinalIgnoreCase))
+            {
+                var bytes = BuildChartsExcel(rows, title);
+                var response = new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new ByteArrayContent(bytes)
+                };
+                response.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+                var safe = NormalizeChatFolderName(chatId);
+                response.Content.Headers.ContentDisposition = new System.Net.Http.Headers.ContentDispositionHeaderValue("attachment")
+                {
+                    FileName = $"messages_charts_{safe}_{DateTime.UtcNow:yyyyMMddHHmmss}.xlsx"
+                };
+                return response;
+            }
+
             var csv = BuildCsv(rows, title);
-            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            var csvResponse = new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(csv, System.Text.Encoding.UTF8, "application/vnd.ms-excel")
             };
-            var safe = NormalizeChatFolderName(chatId);
-            response.Content.Headers.ContentDisposition = new System.Net.Http.Headers.ContentDispositionHeaderValue("attachment")
+            var csvSafe = NormalizeChatFolderName(chatId);
+            csvResponse.Content.Headers.ContentDisposition = new System.Net.Http.Headers.ContentDispositionHeaderValue("attachment")
             {
-                FileName = $"messages_{safe}_{DateTime.UtcNow:yyyyMMddHHmmss}.csv"
+                FileName = $"messages_{csvSafe}_{DateTime.UtcNow:yyyyMMddHHmmss}.csv"
             };
-            return response;
+            return csvResponse;
         }
 
         [HttpGet]
@@ -102,8 +129,8 @@ namespace ChatT30P.Controllers.Api
             if (string.IsNullOrWhiteSpace(chatId))
                 return Request.CreateResponse(HttpStatusCode.BadRequest);
 
-            var title = LoadChatTitle(userId, chatId);
-            return Request.CreateResponse(HttpStatusCode.OK, new { Title = title });
+            var info = LoadChatInfo(userId, chatId);
+            return Request.CreateResponse(HttpStatusCode.OK, new { Title = info.Title, Username = info.Username });
         }
 
         private class ChatTitleItem
@@ -111,6 +138,13 @@ namespace ChatT30P.Controllers.Api
             public string id { get; set; }
             public string title { get; set; }
             public string username { get; set; }
+            public List<ChatTopicItem> topics { get; set; }
+        }
+
+        private class ChatTopicItem
+        {
+            public int id { get; set; }
+            public string title { get; set; }
         }
 
         [HttpGet]
@@ -125,8 +159,6 @@ namespace ChatT30P.Controllers.Api
                 var userId = HttpContext.Current?.User?.Identity?.Name;
                 if (string.IsNullOrEmpty(userId))
                     return Request.CreateResponse(HttpStatusCode.Unauthorized);
-
-                EnsureChatsTable();
 
                 var titles = LoadChatTitles(userId);
                 var range = NormalizeRange(start, end);
@@ -149,13 +181,19 @@ namespace ChatT30P.Controllers.Api
                             var comment = r[2] as string;
                             if (string.IsNullOrWhiteSpace(chatId)) continue;
                             titles.TryGetValue(chatId, out var title);
+                            var sentiment = CountSentimentMessages(chatId, cutoff, rangeEnd);
                             result.Add(new ChatRow
                             {
                                 ChatId = chatId,
                                 Phone = phone,
                                 Comment = comment,
                                 Title = string.IsNullOrWhiteSpace(title) ? chatId : title,
-                                MessageCount = CountMediaMessages(chatId, cutoff, rangeEnd)
+                                MessageCount = CountMediaMessages(chatId, cutoff, rangeEnd),
+                                PositiveCount = sentiment.Positive,
+                                NeutralCount = sentiment.Neutral,
+                                NegativeCount = sentiment.Negative,
+                                UnknownCount = sentiment.Unknown,
+                                AvatarUrl = GetAvatarUrl(chatId)
                             });
                         }
                     }
@@ -167,6 +205,56 @@ namespace ChatT30P.Controllers.Api
             {
                 return Request.CreateErrorResponse(HttpStatusCode.InternalServerError, ex);
             }
+        }
+
+        private static SentimentCounts CountSentimentMessages(string chatId, DateTime startUtc, DateTime endUtc)
+        {
+            var counts = new SentimentCounts();
+            try
+            {
+                var dir = GetTelegramMediaDir(chatId);
+                var logPath = Path.Combine(dir, "messages.log");
+                if (!File.Exists(logPath)) return counts;
+
+                foreach (var line in File.ReadLines(logPath))
+                {
+                    if (string.IsNullOrWhiteSpace(line)) continue;
+                    var parts = line.Split('|');
+                    if (parts.Length < 8) continue;
+                    if (!DateTime.TryParseExact(parts[0], "yyyy-MM-ddTHH:mm:ss", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal, out var parsed))
+                        continue;
+                    if (parsed < startUtc || parsed > endUtc) continue;
+                    var sentiment = parts[7] ?? string.Empty;
+                    switch (sentiment.Trim().ToUpperInvariant())
+                    {
+                        case "P":
+                            counts.Positive++;
+                            break;
+                        case "N":
+                            counts.Negative++;
+                            break;
+                        case "U":
+                            counts.Neutral++;
+                            break;
+                        case "O":
+                        default:
+                            counts.Unknown++;
+                            break;
+                    }
+                }
+            }
+            catch
+            {
+            }
+            return counts;
+        }
+
+        private struct SentimentCounts
+        {
+            public int Positive;
+            public int Neutral;
+            public int Negative;
+            public int Unknown;
         }
 
         [HttpDelete]
@@ -203,50 +291,12 @@ namespace ChatT30P.Controllers.Api
             }
         }
 
-        private static void EnsureChatsTable()
-        {
-            try
-            {
-                using (var cn = new SqlConnection(ConnectionString))
-                using (var cmd = cn.CreateCommand())
-                {
-                    cmd.CommandText = @"
-IF OBJECT_ID('dbo.chats', 'U') IS NULL
-BEGIN
-    CREATE TABLE dbo.chats(
-        id INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
-        user_id NVARCHAR(128) NOT NULL,
-        phone NVARCHAR(64) NULL,
-        chat_id NVARCHAR(128) NOT NULL,
-        comment NVARCHAR(512) NULL,
-        updated_at DATETIME NOT NULL DEFAULT(GETDATE())
-    );
-    CREATE INDEX IX_chats_user_id ON dbo.chats(user_id);
-    CREATE UNIQUE INDEX IX_chats_user_chat ON dbo.chats(user_id, chat_id);
-END
-ELSE IF COL_LENGTH('dbo.chats','phone') IS NULL
-BEGIN
-    ALTER TABLE dbo.chats ADD phone NVARCHAR(64) NULL;
-END
-ELSE IF COL_LENGTH('dbo.chats','comment') IS NULL
-BEGIN
-    ALTER TABLE dbo.chats ADD comment NVARCHAR(512) NULL;
-END";
-                    cn.Open();
-                    cmd.ExecuteNonQuery();
-                }
-            }
-            catch
-            {
-            }
-        }
-
+       
         private class ChatInfo
         {
             public string Title { get; set; }
             public string Username { get; set; }
         }
-
         private static Dictionary<string, string> LoadChatTitles(string userId)
         {
             var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -273,6 +323,17 @@ END";
                                     if (item == null || string.IsNullOrWhiteSpace(item.id)) continue;
                                     if (!map.ContainsKey(item.id))
                                         map[item.id] = item.title;
+                                    if (item.topics != null && item.topics.Count > 0)
+                                    {
+                                        foreach (var topic in item.topics)
+                                        {
+                                            if (topic == null || topic.id <= 0) continue;
+                                            var topicTitle = BuildTopicTitle(item.title, topic.title, topic.id);
+                                            var topicId = BuildTopicChatId(item.id, topic.id);
+                                            if (!map.ContainsKey(topicId))
+                                                map[topicId] = topicTitle;
+                                        }
+                                    }
                                 }
                             }
                             catch
@@ -311,11 +372,26 @@ END";
                                 var match = items.FirstOrDefault(i => i != null && string.Equals(i.id, chatId, StringComparison.OrdinalIgnoreCase));
                                 if (match != null)
                                 {
-                                    return new ChatInfo
+                                        return new ChatInfo
+                                        {
+                                            Title = string.IsNullOrWhiteSpace(match.title) ? chatId : match.title,
+                                            Username = IsTelegramChatId(match.id) ? match.username : null
+                                        };
+                                }
+                                if (TryExtractTopicId(chatId, out var baseId, out var topicId))
+                                {
+                                    var baseItem = items.FirstOrDefault(i => i != null && string.Equals(i.id, baseId, StringComparison.OrdinalIgnoreCase));
+                                    if (baseItem != null)
                                     {
-                                        Title = string.IsNullOrWhiteSpace(match.title) ? chatId : match.title,
-                                        Username = match.username
-                                    };
+                                        var topicTitle = baseItem.topics == null
+                                            ? null
+                                            : baseItem.topics.FirstOrDefault(t => t != null && t.id == topicId)?.title;
+                                        return new ChatInfo
+                                        {
+                                            Title = BuildTopicTitle(baseItem.title, topicTitle, topicId),
+                                            Username = IsTelegramChatId(baseItem.id) ? baseItem.username : null
+                                        };
+                                    }
                                 }
                             }
                             catch
@@ -329,6 +405,47 @@ END";
             {
             }
             return new ChatInfo { Title = chatId, Username = null };
+        }
+
+        private static string BuildTopicChatId(string chatId, int topicId)
+        {
+            if (string.IsNullOrWhiteSpace(chatId)) return chatId;
+            var baseId = chatId;
+            var idx = chatId.LastIndexOf(TopicSuffix, StringComparison.OrdinalIgnoreCase);
+            if (idx >= 0)
+                baseId = chatId.Substring(0, idx);
+            return baseId + TopicSuffix + topicId;
+        }
+
+        private static string BuildTopicTitle(string chatTitle, string topicTitle, int topicId)
+        {
+            var baseTitle = chatTitle ?? string.Empty;
+            var topicText = string.IsNullOrWhiteSpace(topicTitle) ? ("Топик " + topicId) : topicTitle;
+            if (string.IsNullOrWhiteSpace(baseTitle)) return topicText;
+            return baseTitle + " - " + topicText;
+        }
+
+        private static bool IsTelegramChatId(string chatId)
+        {
+            if (string.IsNullOrWhiteSpace(chatId)) return false;
+            var baseId = chatId;
+            var idx = chatId.LastIndexOf(TopicSuffix, StringComparison.OrdinalIgnoreCase);
+            if (idx >= 0)
+                baseId = chatId.Substring(0, idx);
+            return baseId.StartsWith("chat:", StringComparison.OrdinalIgnoreCase)
+                || baseId.StartsWith("channel:", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool TryExtractTopicId(string chatId, out string baseId, out int topicId)
+        {
+            baseId = chatId;
+            topicId = 0;
+            if (string.IsNullOrWhiteSpace(chatId)) return false;
+            var idx = chatId.LastIndexOf(TopicSuffix, StringComparison.OrdinalIgnoreCase);
+            if (idx < 0) return false;
+            baseId = chatId.Substring(0, idx);
+            var part = chatId.Substring(idx + TopicSuffix.Length);
+            return int.TryParse(part, out topicId);
         }
 
         private static int CountMediaMessages(string chatId, DateTime startUtc, DateTime endUtc)
@@ -366,7 +483,7 @@ END";
         private static (DateTime Start, DateTime End) NormalizeRange(DateTime? start, DateTime? end)
         {
             var endUtc = (end ?? DateTime.UtcNow).ToUniversalTime();
-            var startUtc = (start ?? endUtc.AddMonths(-1)).ToUniversalTime();
+            var startUtc = (start ?? endUtc.AddMonths(-2)).ToUniversalTime();
             if (endUtc < startUtc)
             {
                 var tmp = endUtc;
@@ -376,42 +493,87 @@ END";
             return (startUtc, endUtc);
         }
 
-        private static List<ChatMessageRow> LoadMessages(string chatId, DateTime startUtc, DateTime endUtc)
+        private static List<ChatMessageRow> LoadMessages(string chatId, DateTime startUtc, DateTime endUtc, string query)
         {
             var result = new List<ChatMessageRow>();
             var dir = GetTelegramMediaDir(chatId);
             var logPath = Path.Combine(dir, "messages.log");
             if (!File.Exists(logPath)) return result;
 
+            var queryText = string.IsNullOrWhiteSpace(query) ? null : query.Trim();
+            var entries = new List<ChatMessageLogEntry>();
+            var dateMap = new Dictionary<int, DateTime>();
             foreach (var line in File.ReadLines(logPath))
             {
                 if (string.IsNullOrWhiteSpace(line)) continue;
                 var parts = line.Split('|');
-                if (parts.Length < 2) continue;
-                if (!DateTime.TryParse(parts[0], null, System.Globalization.DateTimeStyles.AdjustToUniversal, out var parsed))
+                if (parts.Length < 8) continue;
+                if (!DateTime.TryParseExact(parts[0], "yyyy-MM-ddTHH:mm:ss", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal, out var parsed))
                     continue;
-                if (parsed < startUtc || parsed > endUtc) continue;
                 if (!int.TryParse(parts[1], out var messageId))
                     continue;
-                var sender = parts.Length > 2 ? parts[2] : string.Empty;
-                var views = parts.Length > 3 && int.TryParse(parts[3], out var v) ? v : 0;
-                var replies = parts.Length > 4 && int.TryParse(parts[4], out var r) ? r : 0;
-                var sentiment = parts.Length > 5 ? parts[5] : string.Empty;
-                var text = ReadMessageText(chatId, parsed, messageId);
+                var replyToId = int.TryParse(parts[6], out var replyId) ? replyId : 0;
+                var entry = new ChatMessageLogEntry
+                {
+                    Date = parsed,
+                    MessageId = messageId,
+                    Sender = parts.Length > 2 ? parts[2] : string.Empty,
+                    SenderId = parts[3],
+                    Views = int.TryParse(parts[4], out var v) ? v : 0,
+                    Replies = int.TryParse(parts[5], out var r) ? r : 0,
+                    ReplyToMessageId = replyToId,
+                    Sentiment = ExpandSentimentCode(parts[7])
+                };
+                entries.Add(entry);
+                if (!dateMap.ContainsKey(messageId))
+                    dateMap[messageId] = parsed;
+            }
+
+            foreach (var entry in entries)
+            {
+                if (entry.Date < startUtc || entry.Date > endUtc) continue;
+                var text = ReadMessageText(chatId, entry.Date, entry.MessageId);
+                if (!string.IsNullOrEmpty(queryText))
+                {
+                    if (string.IsNullOrEmpty(text) || text.IndexOf(queryText, StringComparison.OrdinalIgnoreCase) < 0)
+                        continue;
+                }
+
+                var replyText = string.Empty;
+                if (entry.ReplyToMessageId > 0 && dateMap.TryGetValue(entry.ReplyToMessageId, out var replyDate))
+                {
+                    replyText = ReadMessageText(chatId, replyDate, entry.ReplyToMessageId);
+                }
+
                 result.Add(new ChatMessageRow
                 {
-                    MessageId = messageId,
-                    DateText = parsed.ToString("yyyy-MM-dd HH:mm:ss"),
-                    DateTicks = parsed.Ticks,
-                    FileName = $"{parsed:yyyyMMdd_HHmmss}_{messageId}.txt",
-                    Sender = sender,
+                    MessageId = entry.MessageId,
+                    DateText = entry.Date.ToString("yyyy-MM-dd HH:mm:ss"),
+                    DateTicks = entry.Date.Ticks,
+                    FileName = $"{entry.Date:yyyyMMdd_HHmmss}_{entry.MessageId}.txt",
+                    Sender = entry.Sender,
+                    SenderId = entry.SenderId,
                     Text = text,
-                    Views = views,
-                    Replies = replies,
-                    Sentiment = sentiment
+                    ReplyToMessageId = entry.ReplyToMessageId,
+                    ReplyText = replyText,
+                    Views = entry.Views,
+                    Replies = entry.Replies,
+                    Sentiment = entry.Sentiment
                 });
             }
             return result;
+        }
+
+        private class ChatMessageLogEntry
+        {
+            public DateTime Date { get; set; }
+            public int MessageId { get; set; }
+            public string Sender { get; set; }
+            public string SenderId { get; set; }
+            public int Views { get; set; }
+            public int Replies { get; set; }
+            public int ReplyToMessageId { get; set; }
+            public string Sentiment { get; set; }
         }
 
         public class UpdateMessageSentimentRequest
@@ -449,21 +611,11 @@ END";
                     var line = lines[i];
                     if (string.IsNullOrWhiteSpace(line)) continue;
                     var parts = line.Split('|');
-                    if (parts.Length < 2) continue;
+                    if (parts.Length < 8) continue;
                     if (!int.TryParse(parts[1], out var id)) continue;
                     if (id != request.MessageId) continue;
-                    var sentiment = (request.Sentiment ?? string.Empty).Replace("|", "/");
-                    if (parts.Length >= 6)
-                    {
-                        parts[5] = sentiment;
-                    }
-                    else
-                    {
-                        var padded = parts.ToList();
-                        while (padded.Count < 6) padded.Add(string.Empty);
-                        padded[5] = sentiment;
-                        parts = padded.ToArray();
-                    }
+                    var sentiment = NormalizeSentimentCode(request.Sentiment);
+                    parts[7] = sentiment;
                     lines[i] = string.Join("|", parts);
                     updated = true;
                     break;
@@ -498,6 +650,47 @@ END";
             }
         }
 
+        private static string NormalizeSentimentCode(string sentiment)
+        {
+            if (string.IsNullOrWhiteSpace(sentiment)) return "O";
+            switch (sentiment.Trim().ToLowerInvariant())
+            {
+                case "positive":
+                case "p":
+                    return "P";
+                case "negative":
+                case "n":
+                    return "N";
+                case "neutral":
+                case "u":
+                case "0":
+                    return "U";
+                case "unknown":
+                case "o":
+                    return "O";
+                default:
+                    return "O";
+            }
+        }
+
+        private static string ExpandSentimentCode(string sentiment)
+        {
+            if (string.IsNullOrWhiteSpace(sentiment)) return string.Empty;
+            switch (sentiment.Trim().ToUpperInvariant())
+            {
+                case "P":
+                    return "positive";
+                case "N":
+                    return "negative";
+                case "U":
+                    return "neutral";
+                case "O":
+                    return "unknown";
+                default:
+                    return sentiment;
+            }
+        }
+
         private static string BuildCsv(IEnumerable<ChatMessageRow> rows, string title)
         {
             var sb = new System.Text.StringBuilder();
@@ -519,6 +712,111 @@ END";
                 sb.Append('"').Append(text).Append('"').AppendLine();
             }
             return sb.ToString();
+        }
+
+        private static byte[] BuildChartsExcel(IEnumerable<ChatMessageRow> rows, string title)
+        {
+            var list = rows?.ToList() ?? new List<ChatMessageRow>();
+            var sentiments = new[] { "positive", "neutral", "negative", "unknown" };
+            var sentimentLabels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["positive"] = "Позитивное",
+                ["neutral"] = "Нейтральное",
+                ["negative"] = "Негативное",
+                ["unknown"] = "O — не определено"
+            };
+
+            var summaryCounts = sentiments.ToDictionary(s => s, s => 0, StringComparer.OrdinalIgnoreCase);
+            var dayCounts = new SortedDictionary<DateTime, Dictionary<string, int>>();
+
+            foreach (var row in list)
+            {
+                var sentiment = (row?.Sentiment ?? string.Empty).Trim().ToLowerInvariant();
+                if (!summaryCounts.ContainsKey(sentiment))
+                    sentiment = "unknown";
+                summaryCounts[sentiment]++;
+
+                if (!DateTime.TryParse(row?.DateText, out var date))
+                    continue;
+                var day = date.Date;
+                if (!dayCounts.TryGetValue(day, out var map))
+                {
+                    map = sentiments.ToDictionary(s => s, s => 0, StringComparer.OrdinalIgnoreCase);
+                    dayCounts[day] = map;
+                }
+                map[sentiment]++;
+            }
+
+            using (var package = new ExcelPackage())
+            {
+                var summarySheet = package.Workbook.Worksheets.Add("Summary");
+                summarySheet.Cells[1, 1].Value = "Sentiment";
+                summarySheet.Cells[1, 2].Value = "Count";
+                var rowIndex = 2;
+                foreach (var sentiment in sentiments)
+                {
+                    summarySheet.Cells[rowIndex, 1].Value = sentimentLabels[sentiment];
+                    summarySheet.Cells[rowIndex, 2].Value = summaryCounts[sentiment];
+                    rowIndex++;
+                }
+                summarySheet.Cells[1, 1, rowIndex - 1, 2].AutoFitColumns();
+
+                var dailySheet = package.Workbook.Worksheets.Add("Daily");
+                dailySheet.Cells[1, 1].Value = "Date";
+                for (var i = 0; i < sentiments.Length; i++)
+                {
+                    dailySheet.Cells[1, i + 2].Value = sentimentLabels[sentiments[i]];
+                }
+                dailySheet.Cells[1, sentiments.Length + 2].Value = "Total";
+
+                rowIndex = 2;
+                foreach (var dayEntry in dayCounts)
+                {
+                    dailySheet.Cells[rowIndex, 1].Value = dayEntry.Key.ToString("yyyy-MM-dd");
+                    var total = 0;
+                    for (var i = 0; i < sentiments.Length; i++)
+                    {
+                        var value = dayEntry.Value[sentiments[i]];
+                        dailySheet.Cells[rowIndex, i + 2].Value = value;
+                        total += value;
+                    }
+                    dailySheet.Cells[rowIndex, sentiments.Length + 2].Value = total;
+                    rowIndex++;
+                }
+                dailySheet.Cells[1, 1, Math.Max(1, rowIndex - 1), sentiments.Length + 2].AutoFitColumns();
+
+                var chartSheet = package.Workbook.Worksheets.Add("Charts");
+                if (!string.IsNullOrWhiteSpace(title))
+                {
+                    chartSheet.Cells[1, 1].Value = title;
+                }
+
+                var pieChart = chartSheet.Drawings.AddChart("SentimentPie", eChartType.Pie) as ExcelPieChart;
+                if (pieChart != null)
+                {
+                    pieChart.Title.Text = "Распределение тональности";
+                    pieChart.SetPosition(2, 0, 0, 0);
+                    pieChart.SetSize(400, 300);
+                    var labelRange = summarySheet.Cells[2, 1, sentiments.Length + 1, 1];
+                    var valueRange = summarySheet.Cells[2, 2, sentiments.Length + 1, 2];
+                    pieChart.Series.Add(valueRange, labelRange);
+                }
+
+                var stackedChart = chartSheet.Drawings.AddChart("SentimentByDay", eChartType.ColumnStacked);
+                stackedChart.Title.Text = "Динамика по периодам";
+                stackedChart.SetPosition(2, 0, 6, 0);
+                stackedChart.SetSize(600, 300);
+                var lastRow = Math.Max(2, dayCounts.Count + 1);
+                var xRange = dailySheet.Cells[2, 1, lastRow, 1];
+                for (var i = 0; i < sentiments.Length; i++)
+                {
+                    var dataRange = dailySheet.Cells[2, i + 2, lastRow, i + 2];
+                    var series = stackedChart.Series.Add(dataRange, xRange);
+                    series.Header = dailySheet.Cells[1, i + 2].Value?.ToString();
+                }
+
+                return package.GetAsByteArray();
+            }
         }
 
         private static string LoadChatTitle(string userId, string chatId)
@@ -586,6 +884,22 @@ END";
             foreach (var c in Path.GetInvalidFileNameChars())
                 s = s.Replace(c, '_');
             return s;
+        }
+
+        private static string GetAvatarUrl(string chatId)
+        {
+            try
+            {
+                var fileName = NormalizeChatFolderName(chatId) + ".jpg";
+                var baseDir = HttpContext.Current?.Server?.MapPath("~/Content/ava") ?? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Content", "ava");
+                var path = Path.Combine(baseDir, fileName);
+                if (File.Exists(path))
+                    return "/Content/ava/" + fileName;
+            }
+            catch
+            {
+            }
+            return null;
         }
 
         private static string NormalizePhone(string phone)

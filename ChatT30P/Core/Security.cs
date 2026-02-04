@@ -100,7 +100,8 @@ Stack Trace:
                 // for extra security, make sure the UserData matches the current blog instance.
                 // this would prevent a cookie name change for a forms auth cookie encrypted in
                 // the same application (different blog) as being valid for this blog instance.
-                if (authTicket != null && !string.IsNullOrWhiteSpace(authTicket.UserData) && authTicket.UserData.Equals(HttpContext.Current.Request.Url.Host, StringComparison.OrdinalIgnoreCase))
+                if (authTicket != null && !string.IsNullOrWhiteSpace(authTicket.UserData) &&
+                    authTicket.UserData.Equals(NormalizeHost(HttpContext.Current.Request.Url.Host), StringComparison.OrdinalIgnoreCase))
                 {
                     CustomIdentity identity = new CustomIdentity(authTicket.Name, true);
                     CustomPrincipal principal = new CustomPrincipal(identity);
@@ -123,7 +124,7 @@ Stack Trace:
         {
             get
             {
-                return FormsAuthentication.FormsCookieName + "-" + HttpContext.Current.Request.Url.Host;
+                return FormsAuthentication.FormsCookieName + "-" + NormalizeHost(HttpContext.Current.Request.Url.Host);
             }
         }
 
@@ -163,7 +164,7 @@ Stack Trace:
                         DateTime.Now,
                         expirationDate,
                         rememberMe,
-                        HttpContext.Current.Request.Url.Host,
+                        NormalizeHost(HttpContext.Current.Request.Url.Host),
                         FormsAuthentication.FormsCookiePath
                     );
 
@@ -186,7 +187,8 @@ Stack Trace:
 
                     // ignore Return URLs not beginning with a forward slash, such as remote sites.
                     if (string.IsNullOrWhiteSpace(returnUrl) ||
-                        (!returnUrl.StartsWith("/") && !returnUrl.Contains("chat.t30p.ru")))
+                        (!returnUrl.StartsWith("/") && !returnUrl.Contains("chat.t30p.ru") && 
+                        !returnUrl.Contains("chatometr.ru")))
                         returnUrl = null;
 
                     if (!string.IsNullOrWhiteSpace(returnUrl))
@@ -203,6 +205,15 @@ Stack Trace:
             }
 
             return false;
+        }
+
+        private static string NormalizeHost(string host)
+        {
+            if (string.IsNullOrWhiteSpace(host)) return string.Empty;
+            host = host.Trim().ToLowerInvariant();
+            if (host.StartsWith("www.", StringComparison.Ordinal))
+                host = host.Substring(4);
+            return host;
         }
 
         #region "Properties"

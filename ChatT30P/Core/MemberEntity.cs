@@ -22,7 +22,13 @@ namespace ChatT30P.Core
         {
             get
             {
-                return Path.Combine(Environment.GetEnvironmentVariable("TEMP"), ContainerName);
+                var dataDirectory = AppDomain.CurrentDomain.GetData("DataDirectory") as string;
+                if (string.IsNullOrWhiteSpace(dataDirectory))
+                {
+                    dataDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "App_Data");
+                }
+
+                return Path.Combine(dataDirectory, ContainerName);
             }
         }
 

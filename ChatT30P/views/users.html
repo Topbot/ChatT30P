@@ -27,6 +27,7 @@
                         <th>Email</th>
                         <th>IsPaid</th>
                         <th>IsAdmin</th>
+                        <th>Новый пароль</th>
                         <th></th>
                     </tr>
                 </thead>
@@ -39,6 +40,9 @@
                         </td>
                         <td>
                             <input type="checkbox" data-ng-model="u.IsAdmin" />
+                        </td>
+                        <td>
+                            <input type="password" class="form-control" data-ng-model="newPasswords[u.UserName]" placeholder="Новый пароль" />
                         </td>
                         <td class="text-right">
                             <button class="btn btn-xs btn-primary" data-ng-click="save(u)">Сохранить</button>

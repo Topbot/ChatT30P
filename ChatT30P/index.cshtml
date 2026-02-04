@@ -65,7 +65,10 @@
                         <div class="text-muted" style="margin-bottom:10px;">
                             Выберите чаты, сообщения в которых будут мониториться.
                             <label style="font-weight: normal; margin-left: 10px;">
-                                <input type="checkbox" data-ng-model="$root.onlyChatType" /> оставлять только чаты
+                                <input type="checkbox" data-ng-model="$root.onlyChatType" data-ng-change="$root.toggleChatTypeFilter('chat')" /> оставлять только чаты
+                            </label>
+                            <label style="font-weight: normal; margin-left: 10px;">
+                                <input type="checkbox" data-ng-model="$root.onlyForumType" data-ng-change="$root.toggleChatTypeFilter('forum')" /> только форумы
                             </label>
                         </div>
                         <div data-ng-if="!$root.availableChats || $root.availableChats.length === 0" class="text-muted">
@@ -77,7 +80,8 @@
                                     <input type="checkbox"
                                            data-ng-change="$root.toggleChatSelection(c)"
                                            data-ng-model="$root.selectedChatMap[c.id]" />
-                                    <i class="fa fa-comments" data-ng-if="c.type === 'chat'"></i>
+                                    <i class="fa fa-comments" data-ng-if="c.type === 'chat'" title="Чат"></i>
+                                    <i class="fa fa-comments-o" data-ng-if="c.type === 'topic'" title="Форум"></i>
                                     <span>{{c.title}}</span>
                                     <small class="text-muted" data-ng-if="c.last"> — {{$root.truncateChatLast(c.last)}}</small>
                                 </label>

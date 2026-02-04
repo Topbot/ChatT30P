@@ -28,115 +28,215 @@
                         <input type="text" class="form-control" placeholder="Поиск по сообщению..." data-ng-model="$parent.searchText" data-ng-change="applyMessageFilter()" />
                 </div>
                 <div class="col-md-3">
-                        <input type="date" class="form-control" data-ng-model="$parent.periodStart" data-ng-change="refresh()" />
+                        <input type="date" class="form-control" data-ng-model="$parent.periodStart" data-ng-change="onPeriodChange()" />
                 </div>
                 <div class="col-md-3">
-                        <input type="date" class="form-control" data-ng-model="$parent.periodEnd" data-ng-change="refresh()" />
+                        <input type="date" class="form-control" data-ng-model="$parent.periodEnd" data-ng-change="onPeriodChange()" />
                 </div>
                 <div class="col-md-2">
                     <div class="btn-group" style="width:100%;">
-                        <button class="btn btn-default" data-ng-click="setQuickRange('today')">день</button>
-                        <button class="btn btn-default" data-ng-click="setQuickRange('week')">неделя</button>
-                        <button class="btn btn-default" data-ng-click="setQuickRange('month')">месяц</button>
-                        <button class="btn btn-default" data-ng-click="setQuickRange('2months')">2 месяца</button>
+                        <button class="btn btn-default" data-ng-class="{active: activeRange === 'today'}" data-ng-click="setQuickRange('today')">день</button>
+                        <button class="btn btn-default" data-ng-class="{active: activeRange === 'week'}" data-ng-click="setQuickRange('week')">неделя</button>
+                        <button class="btn btn-default" data-ng-class="{active: activeRange === 'month'}" data-ng-click="setQuickRange('month')">месяц</button>
+                        <button class="btn btn-default" data-ng-class="{active: activeRange === '2months'}" data-ng-click="setQuickRange('2months')">2 месяца</button>
                     </div>
                 </div>
                 <div class="col-md-2 text-right"></div>
             </div>
 
-            <div class="row" style="margin-bottom: 10px;">
-                <div class="col-md-3">
-                    <label style="display:inline-block; margin-right:5px; margin-top:7px;">Сообщений на странице:</label>
-                    <select class="form-control" style="display:inline-block; width:80px;" data-ng-model="pageSize" data-ng-options="s for s in pageSizes" data-ng-change="setPage(1)"></select>
-                </div>
-                <div class="col-md-9 text-right">
-                    <ul class="pagination" style="margin: 0;">
-                        <li data-ng-class="{disabled: currentPage <= 1}">
-                            <a href="" data-ng-click="prevPage()">&laquo;</a>
-                        </li>
-                        <li data-ng-repeat="p in visiblePages()" data-ng-class="{active: p === currentPage}">
-                            <a href="" data-ng-click="setPage(p)">{{p}}</a>
-                        </li>
-                        <li data-ng-class="{disabled: currentPage >= pageCount()}">
-                            <a href="" data-ng-click="nextPage()">&raquo;</a>
-                        </li>
-                    </ul>
-                </div>
-            </div>
+            <ul class="nav nav-tabs" style="margin-bottom:10px;">
+                <li data-ng-class="{active: activeTab === 'table'}">
+                    <a href="" data-ng-click="setTab('table')">Таблица сообщений</a>
+                </li>
+                <li data-ng-class="{active: activeTab === 'charts'}">
+                    <a href="" data-ng-click="setTab('charts')">Графическая статистика</a>
+                </li>
+            </ul>
 
-            <table class="table table-bordered table-striped table-hover table-responsive">
-                <thead>
-                    <tr>
-                        <th data-ng-click="setSort('DateTicks')" class="cursor-pointer" style="width: 180px;">
-                            Дата
-                            <span data-ng-if="sortField === 'DateTicks'">{{sortReverse ? '▼' : '▲'}}</span>
-                        </th>
-                        <th data-ng-click="setSort('Sender')" class="cursor-pointer" style="width: 220px;">
-                            Отправитель
-                            <span data-ng-if="sortField === 'Sender'">{{sortReverse ? '▼' : '▲'}}</span>
-                        </th>
-                        <th data-ng-click="setSort('Views')" class="cursor-pointer" style="width: 120px;">
-                            Просмотры
-                            <span data-ng-if="sortField === 'Views'">{{sortReverse ? '▼' : '▲'}}</span>
-                        </th>
-                        <th data-ng-click="setSort('Text')" class="cursor-pointer">
-                            Сообщение (Сообщений по критериям: {{totalMessages}})
-                            <span data-ng-if="sortField === 'Text'">{{sortReverse ? '▼' : '▲'}}</span>
-                        </th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr class="message-row" data-ng-repeat="item in (filteredItems | orderBy:sortField:sortReverse) | limitTo:pageSize:((currentPage-1)*pageSize)">
-                        <td>
-                            <span data-ng-attr-title="{{relativeDate(item)}}">{{item.DateText}}</span>
-                        </td>
-                        <td>{{item.Sender}}</td>
-                        <td data-ng-class="getSentimentClass(item)">
-                            <span data-ng-attr-title="{{sentimentLabel(item)}}">{{item.Views}}</span>
-                            <span class="sentiment-dot sentiment-dot-positive" data-ng-if="item.Sentiment === 'positive'" title="Позитивное"></span>
-                            <span class="sentiment-dot sentiment-dot-negative" data-ng-if="item.Sentiment === 'negative'" title="Негативное"></span>
-                        </td>
-                        <td>
-                            <div class="message-text">{{truncateMessage(item.Text)}}</div>
-                            <div class="message-actions">
-                                <button class="btn btn-xs btn-default" data-ng-click="copyMessage(item)" title="Копировать текст">
-                                    <i class="fa fa-copy"></i>
-                                </button>
-                                <button class="btn btn-xs btn-default" data-ng-click="openMessage(item)" title="Открыть сообщение">
-                                    <i class="fa fa-external-link"></i>
-                                </button>
-                                <button class="btn btn-xs btn-success" data-ng-click="setSentiment(item, 'positive')" title="Позитивное">+</button>
-                                <button class="btn btn-xs btn-default" data-ng-click="setSentiment(item, 'neutral')" title="Нейтральное">0</button>
-                                <button class="btn btn-xs btn-danger" data-ng-click="setSentiment(item, 'negative')" title="Негативное">-</button>
-                                <span class="message-replies-count">ответов: {{item.Replies}}</span>
+            <div data-ng-show="activeTab === 'table'">
+                <div class="row" style="margin-bottom: 10px;">
+                    <div class="col-md-3">
+                        <label style="display:inline-block; margin-right:5px; margin-top:7px;">Сообщений на странице:</label>
+                        <select class="form-control" style="display:inline-block; width:80px;" data-ng-model="pageSize" data-ng-options="s for s in pageSizes" data-ng-change="setPage(1)"></select>
+                    </div>
+                    <div class="col-md-9 text-right">
+                        <ul class="pagination" style="margin: 0;">
+                            <li data-ng-class="{disabled: currentPage <= 1}">
+                                <a href="" data-ng-click="prevPage()">&laquo;</a>
+                            </li>
+                            <li data-ng-repeat="p in visiblePages()" data-ng-class="{active: p === currentPage}">
+                                <a href="" data-ng-click="setPage(p)">{{p}}</a>
+                            </li>
+                            <li data-ng-class="{disabled: currentPage >= pageCount()}">
+                                <a href="" data-ng-click="nextPage()">&raquo;</a>
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+                <table class="table table-bordered table-striped table-hover table-responsive">
+                    <thead>
+                        <tr>
+                            <th data-ng-click="setSort('DateTicks')" class="cursor-pointer" style="width: 180px;">
+                                Дата
+                                <span data-ng-if="sortField === 'DateTicks'">{{sortReverse ? '▼' : '▲'}}</span>
+                            </th>
+                            <th data-ng-click="setSort('Sender')" class="cursor-pointer" style="width: 220px;">
+                                Отправитель
+                                <span data-ng-if="sortField === 'Sender'">{{sortReverse ? '▼' : '▲'}}</span>
+                            </th>
+                        <th data-ng-click="setSort('Views')" class="cursor-pointer" style="width: 70px; text-align:center;">
+                            <i class="fa fa-eye" title="Просмотры"></i>
+                                <span data-ng-if="sortField === 'Views'">{{sortReverse ? '▼' : '▲'}}</span>
+                            </th>
+                            <th data-ng-click="setSort('Text')" class="cursor-pointer">
+                                Сообщение (Сообщений по критериям: {{totalMessages}})
+                                <span data-ng-if="sortField === 'Text'">{{sortReverse ? '▼' : '▲'}}</span>
+                            </th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr class="message-row" data-ng-repeat="item in (filteredItems | orderBy:sortField:sortReverse) | limitTo:pageSize:((currentPage-1)*pageSize)">
+                            <td>
+                                <span data-ng-attr-title="{{relativeDate(item)}}">{{item.DateText}}</span>
+                            </td>
+                            <td>{{item.Sender}}</td>
+                            <td data-ng-class="getSentimentClass(item)">
+                                <span data-ng-attr-title="{{sentimentLabel(item)}}">{{item.Views}}</span>
+                                <span class="sentiment-dot sentiment-dot-positive" data-ng-if="item.Sentiment === 'positive'" title="Позитивное"></span>
+                                <span class="sentiment-dot sentiment-dot-negative" data-ng-if="item.Sentiment === 'negative'" title="Негативное"></span>
+                            <span class="sentiment-dot" style="background-color:#999;" data-ng-if="item.Sentiment === 'unknown'" title="Не определено"></span>
+                            </td>
+                            <td>
+                            <div class="message-text">
+                                <div class="message-reply-quote" data-ng-if="item.ReplyText" data-ng-attr-title="{{item.ReplyText}}">
+                                    {{truncateMessage(item.ReplyText)}}
+                                </div>
+                                <div>{{truncateMessage(item.Text)}}</div>
                             </div>
-                        </td>
-                    </tr>
-                    <tr data-ng-if="!items || items.length === 0">
-                        <td colspan="4" class="text-muted">Список сообщений пуст.</td>
-                    </tr>
-                </tbody>
-            </table>
+                                <div class="message-actions">
+                                    <button class="btn btn-xs btn-default" data-ng-click="copyMessage(item)" title="Копировать текст">
+                                        <i class="fa fa-copy"></i>
+                                    </button>
+                                    <button class="btn btn-xs btn-default" data-ng-click="openMessage(item)" title="Открыть сообщение">
+                                        <i class="fa fa-external-link"></i>
+                                    </button><br/>
+                                    <button class="btn btn-xs btn-success" data-ng-click="setSentiment(item, 'positive')" title="Позитивное">+</button>
+                                    <button class="btn btn-xs btn-primary" data-ng-click="setSentiment(item, 'neutral')" title="Нейтральное">&nbsp;</button>
+                                    <button class="btn btn-xs btn-danger" data-ng-click="setSentiment(item, 'negative')" title="Негативное">-</button>
+                                    <button class="btn btn-xs btn-default" style="color:#999;" data-ng-click="setSentiment(item, 'unknown')" title="Не определено">0</button>
+                                    <br/><span class="message-replies-count">ответов: {{item.Replies}}</span>
+                                </div>
+                            </td>
+                        </tr>
+                        <tr data-ng-if="!items || items.length === 0">
+                            <td colspan="4" class="text-muted">Список сообщений пуст.</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
 
-            <div class="row" style="margin-bottom: 10px;">
-                <div class="col-md-3">
-                    <label style="display:inline-block; margin-right:5px; margin-top:7px;">Сообщений на странице:</label>
-                    <select class="form-control" style="display:inline-block; width:80px;" data-ng-model="pageSize" data-ng-options="s for s in pageSizes" data-ng-change="setPage(1)"></select>
+            <div data-ng-show="activeTab === 'charts'" class="row" style="margin-bottom:10px;">
+                <div class="col-md-5">
+                    <h4>Распределение тональности</h4>
+                    <div data-ng-if="sentimentTotal === 0" class="text-muted">Нет данных для построения графика.</div>
+                    <svg data-ng-if="sentimentTotal > 0" data-ng-attr-width="{{pieChart.width}}" data-ng-attr-height="{{pieChart.height}}" data-ng-attr-viewBox="0 0 {{pieChart.width}} {{pieChart.height}}">
+                        <g data-ng-repeat="slice in pieChart.slices">
+                            <path data-ng-attr-d="{{slice.path}}" data-ng-attr-fill="{{slice.color}}"></path>
+                        </g>
+                    </svg>
+                    <div style="margin-top:10px;">
+                        <div data-ng-repeat="slice in pieChart.legend">
+                            <span style="display:inline-block;width:12px;height:12px;margin-right:6px;" data-ng-style="{'background-color': slice.color}"></span>
+                            {{slice.label}}: {{slice.count}}
+                        </div>
+                    </div>
                 </div>
-                <div class="col-md-9 text-right">
-                    <ul class="pagination" style="margin: 0;">
-                        <li data-ng-class="{disabled: currentPage <= 1}">
-                            <a href="" data-ng-click="prevPage()">&laquo;</a>
-                        </li>
-                        <li data-ng-repeat="p in visiblePages()" data-ng-class="{active: p === currentPage}">
-                            <a href="" data-ng-click="setPage(p)">{{p}}</a>
-                        </li>
-                        <li data-ng-class="{disabled: currentPage >= pageCount()}">
-                            <a href="" data-ng-click="nextPage()">&raquo;</a>
-                        </li>
-                    </ul>
+                <div class="col-md-7">
+                    <h4>Динамика по периодам</h4>
+                    <div class="btn-group" style="margin-bottom:10px;">
+                        <button class="btn btn-default" data-ng-class="{active: chartType === 'stacked'}" data-ng-click="setChartType('stacked')">Столбцы</button>
+                        <button class="btn btn-default" data-ng-class="{active: chartType === 'percent'}" data-ng-click="setChartType('percent')">100%</button>
+                        <button class="btn btn-default" data-ng-class="{active: chartType === 'line'}" data-ng-click="setChartType('line')">Линии</button>
+                    </div>
+                    <div data-ng-if="barChart.days.length === 0" class="text-muted">Нет данных для построения графика.</div>
+                    <div data-ng-if="barChart.days.length > 0" style="overflow-x:auto;">
+                        <svg data-ng-attr-width="{{barChart.width}}" data-ng-attr-height="{{barChart.height}}" data-ng-attr-viewBox="0 0 {{barChart.width}} {{barChart.height}}">
+                            <g data-ng-if="chartType !== 'line'" data-ng-repeat="segment in barChart.segments">
+                                <rect data-ng-attr-x="{{segment.x}}" data-ng-attr-y="{{segment.y}}" data-ng-attr-width="{{segment.width}}" data-ng-attr-height="{{segment.height}}" data-ng-attr-fill="{{segment.color}}"></rect>
+                            </g>
+                            <g data-ng-if="chartType === 'line'" data-ng-repeat="line in barChart.linePaths">
+                                <path data-ng-attr-d="{{line.path}}" fill="none" data-ng-attr-stroke="{{line.color}}" stroke-width="2"></path>
+                            </g>
+                            <g data-ng-repeat="label in barChart.labels">
+                                <text data-ng-attr-x="{{label.x}}" data-ng-attr-y="{{label.y}}" text-anchor="middle" font-size="10">{{label.text}}</text>
+                            </g>
+                        </svg>
+                    </div>
                 </div>
             </div>
+            <div data-ng-show="activeTab === 'charts'" class="row" style="margin-bottom:10px;">
+                <div class="col-md-4">
+                    <h4>Самые активные комментаторы</h4>
+                    <table class="table table-bordered table-striped table-hover">
+                        <thead>
+                            <tr>
+                                <th>Имя</th>
+                                <th style="width:90px;">Комментариев</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr data-ng-repeat="row in topAllCommenters">
+                                <td>{{row.name}}</td>
+                                <td>{{row.count}} ({{row.percent | number:1}}%)</td>
+                            </tr>
+                            <tr data-ng-if="!topAllCommenters || topAllCommenters.length === 0">
+                                <td colspan="2" class="text-muted">Нет данных.</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="col-md-4">
+                    <h4>Самые позитивные комментаторы</h4>
+                    <table class="table table-bordered table-striped table-hover">
+                        <thead>
+                            <tr>
+                                <th>Имя</th>
+                                <th style="width:90px;">Комментариев</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr data-ng-repeat="row in topPositiveCommenters">
+                                <td>{{row.name}}</td>
+                                <td>{{row.count}} ({{row.percent | number:1}}%)</td>
+                            </tr>
+                            <tr data-ng-if="!topPositiveCommenters || topPositiveCommenters.length === 0">
+                                <td colspan="2" class="text-muted">Нет данных.</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="col-md-4">
+                    <h4>Самые негативные комментаторы</h4>
+                    <table class="table table-bordered table-striped table-hover">
+                        <thead>
+                            <tr>
+                                <th>Имя</th>
+                                <th style="width:90px;">Комментариев</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr data-ng-repeat="row in topNegativeCommenters">
+                                <td>{{row.name}}</td>
+                                <td>{{row.count}} ({{row.percent | number:1}}%)</td>
+                            </tr>
+                            <tr data-ng-if="!topNegativeCommenters || topNegativeCommenters.length === 0">
+                                <td colspan="2" class="text-muted">Нет данных.</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
         </div>
     </div>
 </div>

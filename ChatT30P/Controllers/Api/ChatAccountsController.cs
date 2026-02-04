@@ -1,24 +1,25 @@
-﻿using System;
+﻿using ChatT30P.Controllers.Models;
+using Core;
+using Newtonsoft.Json;
+using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Configuration;
 using System.Data;
 using System.Data.SqlClient;
 using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Net;
 using System.Net.Http;
+using System.Runtime.Remoting.Channels;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Net;
-using System.IO;
 using System.Web;
 using System.Web.Http;
-using System.Linq;
-using System.Collections.Concurrent;
-using ChatT30P.Controllers.Models;
-using Core;
-using Newtonsoft.Json;
-using WTelegram;
 using TL;
+using WTelegram;
 
 namespace ChatT30P.Controllers.Api
 {
@@ -30,6 +31,7 @@ namespace ChatT30P.Controllers.Api
         private static string AdsPowerToken => ConfigurationManager.AppSettings["AdsPower:Token"];
         private static string AdsPowerProxyId => ConfigurationManager.AppSettings["AdsPower:ProxyId"];
         private const string AdsPowerGroupName = "CHAT";
+        private const string TopicSuffix = ":topic:";
 
         private static string TelegramApiId => ConfigurationManager.AppSettings["Telegram:ApiId"];
         private static string TelegramApiHash => ConfigurationManager.AppSettings["Telegram:ApiHash"];
@@ -72,7 +74,6 @@ namespace ChatT30P.Controllers.Api
                 if (string.IsNullOrEmpty(userId))
                     return Request.CreateResponse(HttpStatusCode.Unauthorized);
 
-                EnsureMonitoringChatsTable();
                 var result = new List<string>();
                 using (var cn = new SqlConnection(ConnectionString))
                 using (var cmd = cn.CreateCommand())
@@ -109,15 +110,13 @@ namespace ChatT30P.Controllers.Api
 
         [HttpPost]
         [Route("api/ChatAccounts/MonitoringChats")]
-        public HttpResponseMessage SaveMonitoringChats(SaveMonitoringChatsRequest request)
+        public async Task<HttpResponseMessage> SaveMonitoringChats(SaveMonitoringChatsRequest request)
         {
             try
             {
                 var userId = HttpContext.Current?.User?.Identity?.Name;
                 if (string.IsNullOrEmpty(userId))
                     return Request.CreateResponse(HttpStatusCode.Unauthorized);
-
-                EnsureMonitoringChatsTable();
 
                 var chatIds = request?.ChatIds ?? new List<string>();
                 var platform = request?.Platform;
@@ -159,11 +158,13 @@ namespace ChatT30P.Controllers.Api
                         cmd.ExecuteNonQuery();
 
                         cmd.Parameters.Clear();
-                        cmd.CommandText = "INSERT INTO dbo.chats(user_id, phone, chat_id, comment, updated_at) VALUES(@user_id,@phone,@chat_id,@comment,GETDATE())";
+                        cmd.CommandText = "INSERT INTO dbo.chats(user_id, phone, chat_id, comment, updated_at) VALUES(@user_id,@phone,@chat_id,@comment,@updated_at)";
                         cmd.Parameters.Add("@user_id", SqlDbType.NVarChar, 128).Value = userId;
                         cmd.Parameters.Add("@phone", SqlDbType.NVarChar, 64).Value = (object)normPhone ?? DBNull.Value;
                         var chatIdParam = cmd.Parameters.Add("@chat_id", SqlDbType.NVarChar, 128);
                         var commentParam = cmd.Parameters.Add("@comment", SqlDbType.NVarChar, 512);
+                        var updatedAtParam = cmd.Parameters.Add("@updated_at", SqlDbType.DateTime);
+                        updatedAtParam.Value = DateTime.UtcNow.AddMonths(-2);
 
                         foreach (var cid in chatIds.Distinct())
                         {
@@ -177,6 +178,7 @@ namespace ChatT30P.Controllers.Api
                                         ? existingComments[cid]
                                         : (existingComments.ContainsKey(baseId) ? existingComments[baseId] : null)))
                                 ?? DBNull.Value;
+                            updatedAtParam.Value = DateTime.UtcNow.AddMonths(-2);
                             cmd.ExecuteNonQuery();
                         }
 
@@ -188,17 +190,19 @@ namespace ChatT30P.Controllers.Api
                 {
                     var chatsToFetch = chatIds.Where(cid => !string.IsNullOrWhiteSpace(cid)).Distinct()
                         .Select(cid => ResolveChatIdWithUsername(cid, idMap)).ToList();
-                    Task.Run(async () =>
+                    try
                     {
-                        try
-                        {
-                            await DownloadTelegramMediaAsync(userId, normPhone, chatsToFetch);
-                        }
-                        catch (Exception ex)
-                        {
-                            LogAdsPowerError("Background media download failed.", ex);
-                        }
-                    });
+                        LogAdsPowerError("SaveMonitoringChats: chatsToFetch=" + string.Join(",", chatsToFetch));
+                    }
+                    catch { }
+                    try
+                    {
+                        await DownloadTelegramResourcesAsync(userId, normPhone, chatsToFetch);
+                    }
+                    catch (Exception ex)
+                    {
+                        LogAdsPowerError("Media download failed.", ex);
+                    }
                 }
 
                 return Request.CreateResponse(HttpStatusCode.OK);
@@ -207,6 +211,126 @@ namespace ChatT30P.Controllers.Api
             {
                 LogAdsPowerError("SaveMonitoringChats failed.", ex);
                 return Request.CreateErrorResponse(HttpStatusCode.InternalServerError, ex);
+            }
+        }
+
+        private async Task DownloadTelegramResourcesAsync(string userId, string phone, List<string> chatIds)
+        {
+            if (string.IsNullOrWhiteSpace(userId) || string.IsNullOrWhiteSpace(phone)) return;
+            if (chatIds == null || chatIds.Count == 0) return;
+
+            try { LogAdsPowerError("DownloadTelegramResourcesAsync: chatIds=" + string.Join(",", chatIds)); } catch { }
+
+            var apiId = GetTelegramApiIdOrNull();
+            var apiHash = GetTelegramApiHashOrNull();
+            if (string.IsNullOrWhiteSpace(apiId) || string.IsNullOrWhiteSpace(apiHash)) return;
+
+            var sessionFile = GetTelegramSessionFilePath(userId, phone);
+            if (!File.Exists(sessionFile)) return;
+
+            var sessionSemaphore = GetSessionSemaphore(sessionFile);
+            await sessionSemaphore.WaitAsync();
+            try
+            {
+                using (var client = new Client(what =>
+                {
+                    switch (what)
+                    {
+                        case "api_id": return apiId;
+                        case "api_hash": return apiHash;
+                        case "phone_number": return phone;
+                        case "session_pathname": return sessionFile;
+                        default: return null;
+                    }
+                }))
+                {
+                    await client.ConnectAsync();
+
+                    var dialogs = await client.Messages_GetDialogs();
+                    var peerMap = BuildPeerMap(dialogs);
+                    var cutoff = DateTime.UtcNow.AddMonths(-2);
+
+                    foreach (var chatId in chatIds)
+                    {
+                        var lookupId = ExtractBaseChatId(chatId);
+                        if (!peerMap.TryGetValue(lookupId, out var peer))
+                        {
+                            try { LogAdsPowerError($"DownloadTelegramResourcesAsync skipped. chatId={chatId} lookupId={lookupId} (peer not found)"); } catch { }
+                            continue;
+                        }
+
+                        var dir = GetTelegramMediaDir(chatId);
+                        var lastDownloaded = GetLatestMessageDate(dir);
+                        var effectiveCutoff = lastDownloaded.HasValue && lastDownloaded.Value > cutoff
+                            ? lastDownloaded.Value
+                            : cutoff;
+
+                        try
+                        {
+                            await DownloadPeerAvatarAsync(client, peer, chatId);
+                        }
+                        catch (TL.RpcException ex)
+                        {
+                            if (ex.Message != null && ex.Message.IndexOf("AUTH_KEY_UNREGISTERED", StringComparison.OrdinalIgnoreCase) >= 0)
+                            {
+                                LogAdsPowerError($"DownloadTelegramResourcesAsync: AUTH_KEY_UNREGISTERED for chatId={chatId}");
+                            }
+                            else
+                            {
+                                LogAdsPowerError($"DownloadTelegramResourcesAsync: avatar failed for chatId={chatId}", ex);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            LogAdsPowerError($"DownloadTelegramResourcesAsync: avatar failed for chatId={chatId}", ex);
+                        }
+
+                        try
+                        {
+                            if (TryExtractTopicId(chatId, out var topicId))
+                            {
+                                await DownloadTopicTextsAsync(client, peer, topicId, dir, effectiveCutoff);
+                            }
+                            else
+                            {
+                                await DownloadChatTextsAsync(client, peer, dir, effectiveCutoff);
+                            }
+                        }
+                        catch (TL.RpcException ex)
+                        {
+                            if (ex.Message != null && ex.Message.IndexOf("AUTH_KEY_UNREGISTERED", StringComparison.OrdinalIgnoreCase) >= 0)
+                            {
+                                LogAdsPowerError($"DownloadTelegramResourcesAsync: AUTH_KEY_UNREGISTERED for chatId={chatId}");
+                                continue;
+                            }
+                            throw;
+                        }
+                        catch (WTelegram.WTException ex)
+                        {
+                            var msg = ex.Message ?? string.Empty;
+                            if (msg.IndexOf("AUTH_KEY_UNREGISTERED", StringComparison.OrdinalIgnoreCase) >= 0)
+                            {
+                                LogAdsPowerError($"DownloadTelegramResourcesAsync: AUTH_KEY_UNREGISTERED for chatId={chatId}");
+                                continue;
+                            }
+                            throw;
+                        }
+                    }
+                }
+            }
+            catch (WTelegram.WTException ex)
+            {
+                var msg = ex.Message ?? string.Empty;
+                if (msg.IndexOf("Exception while reading session file", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    LogAdsPowerError("DownloadTelegramResourcesAsync: session file invalid.", ex);
+                    return;
+                }
+                throw;
+            }
+            finally
+            {
+                sessionSemaphore.Release();
             }
         }
 
@@ -280,12 +404,20 @@ namespace ChatT30P.Controllers.Api
         private static string ResolveChatIdWithUsername(string chatId, Dictionary<string, string> map)
         {
             if (string.IsNullOrWhiteSpace(chatId)) return chatId;
-            if (chatId.IndexOf("channel:", StringComparison.OrdinalIgnoreCase) != 0)
+            var topicSuffix = string.Empty;
+            var topicIndex = chatId.LastIndexOf(TopicSuffix, StringComparison.OrdinalIgnoreCase);
+            var baseChatId = chatId;
+            if (topicIndex >= 0)
+            {
+                topicSuffix = chatId.Substring(topicIndex);
+                baseChatId = chatId.Substring(0, topicIndex);
+            }
+            if (baseChatId.IndexOf("channel:", StringComparison.OrdinalIgnoreCase) != 0)
                 return chatId;
-            var baseId = ExtractBaseChatId(chatId);
+            var baseId = ExtractBaseChatId(baseChatId);
             if (map != null && map.TryGetValue(baseId, out var mapped) && !string.IsNullOrWhiteSpace(mapped))
-                return mapped;
-            return chatId;
+                return mapped + topicSuffix;
+            return baseChatId + topicSuffix;
         }
 
         private static string ExtractBaseChatId(string chatId)
@@ -300,10 +432,22 @@ namespace ChatT30P.Controllers.Api
             return chatId;
         }
 
+        private static bool TryExtractTopicId(string chatId, out int topicId)
+        {
+            topicId = 0;
+            if (string.IsNullOrWhiteSpace(chatId)) return false;
+            var idx = chatId.LastIndexOf(TopicSuffix, StringComparison.OrdinalIgnoreCase);
+            if (idx < 0) return false;
+            var part = chatId.Substring(idx + TopicSuffix.Length);
+            return int.TryParse(part, out topicId);
+        }
+
         private async Task DownloadTelegramMediaAsync(string userId, string phone, List<string> chatIds)
         {
             if (string.IsNullOrWhiteSpace(userId) || string.IsNullOrWhiteSpace(phone)) return;
             if (chatIds == null || chatIds.Count == 0) return;
+
+            try { LogAdsPowerError("DownloadTelegramMediaAsync: chatIds=" + string.Join(",", chatIds)); } catch { }
 
             var apiId = GetTelegramApiIdOrNull();
             var apiHash = GetTelegramApiHashOrNull();
@@ -332,19 +476,33 @@ namespace ChatT30P.Controllers.Api
 
                     var dialogs = await client.Messages_GetDialogs();
                     var peerMap = BuildPeerMap(dialogs);
-                    var cutoff = DateTime.UtcNow.AddMonths(-6);
+                    var cutoff = DateTime.UtcNow.AddMonths(-2);
 
                     foreach (var chatId in chatIds)
                     {
                         var lookupId = ExtractBaseChatId(chatId);
                         if (!peerMap.TryGetValue(lookupId, out var peer))
+                        {
+                            try { LogAdsPowerError($"DownloadChatTextsAsync skipped. chatId={chatId} lookupId={lookupId} (peer not found)"); } catch { }
                             continue;
+                        }
                         var dir = GetTelegramMediaDir(chatId);
                         var lastDownloaded = GetLatestMessageDate(dir);
                         var effectiveCutoff = lastDownloaded.HasValue && lastDownloaded.Value > cutoff
                             ? lastDownloaded.Value
                             : cutoff;
-                        await DownloadChatTextsAsync(client, peer, dir, effectiveCutoff);
+                        if (TryExtractTopicId(chatId, out var topicId))
+                        {
+                            try { LogAdsPowerError($"DownloadTopicTextsAsync start. chatId={chatId} lookupId={lookupId} topicId={topicId}"); } catch { }
+                            await DownloadTopicTextsAsync(client, peer, topicId, dir, effectiveCutoff);
+                            try { LogAdsPowerError($"DownloadTopicTextsAsync done. chatId={chatId} lookupId={lookupId} topicId={topicId}"); } catch { }
+                        }
+                        else
+                        {
+                            try { LogAdsPowerError($"DownloadChatTextsAsync start. chatId={chatId} lookupId={lookupId}"); } catch { }
+                            await DownloadChatTextsAsync(client, peer, dir, effectiveCutoff);
+                            try { LogAdsPowerError($"DownloadChatTextsAsync done. chatId={chatId} lookupId={lookupId}"); } catch { }
+                        }
                     }
                 }
             }
@@ -424,10 +582,28 @@ namespace ChatT30P.Controllers.Api
                 }
                 return latestFile;
             }
-            catch
+            catch (Exception ex)
             {
+                try { LogAdsPowerError("DownloadPeerAvatarAsync failed.", ex); } catch { }
                 return null;
             }
+        }
+
+        private static object TryGetMemberValue(object target, string memberName)
+        {
+            if (target == null || string.IsNullOrWhiteSpace(memberName)) return null;
+            var flags = System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic
+                | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.IgnoreCase;
+            var type = target.GetType();
+            while (type != null)
+            {
+                var prop = type.GetProperty(memberName, flags);
+                if (prop != null) return prop.GetValue(target, null);
+                var field = type.GetField(memberName, flags);
+                if (field != null) return field.GetValue(target);
+                type = type.BaseType;
+            }
+            return null;
         }
 
         private static Dictionary<string, InputPeer> BuildPeerMap(Messages_DialogsBase dialogs)
@@ -481,40 +657,81 @@ namespace ChatT30P.Controllers.Api
                 if (messages == null || messages.Count == 0)
                     break;
 
-                var shouldStop = false;
-                foreach (var msgBase in messages)
-                {
-                    if (msgBase is Message msg)
-                    {
-                        var msgDate = msg.date.ToUniversalTime();
-                        if (msgDate <= cutoffUtc)
-                        {
-                            shouldStop = true;
-                            break;
-                        }
+                var pageMessages = messages.OfType<Message>().ToList();
+                if (pageMessages.Count == 0)
+                    break;
 
-                        if (!string.IsNullOrWhiteSpace(msg.message))
+                var shouldStop = false;
+                foreach (var msg in pageMessages.OrderByDescending(m => m.date))
+                {
+                    var msgDate = msg.date.ToUniversalTime();
+                    if (msgDate < cutoffUtc)
+                    {
+                        shouldStop = true;
+                        break;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(msg.message))
+                    {
+                        var filePath = SaveTextMessage(dir, msg.id, msgDate, msg.message);
+                        if (!string.IsNullOrWhiteSpace(filePath))
                         {
-                            var filePath = SaveTextMessage(dir, msg.id, msgDate, msg.message);
-                            if (!string.IsNullOrWhiteSpace(filePath))
-                            {
-                                var sender = GetSenderLabel(msg, senderMap);
-                                var views = GetMessageViews(msg);
-                                var replies = GetMessageReplies(msg);
-                                var sentiment = RuBertSentiment.Analyze(msg.message);
-                                AppendMessageLog(dir, msgDate, msg.id, sender, views, replies, sentiment);
-                            }
+                            var sender = GetSenderLabel(msg, senderMap);
+                            var senderId = GetSenderId(msg);
+                            var views = GetMessageViews(msg);
+                            var replies = GetMessageReplies(msg);
+                            var replyToId = GetReplyToMessageId(msg);
+                            AppendMessageLog(dir, msgDate, msg.id, sender, senderId, views, replies, replyToId, "neutral");
                         }
                     }
                 }
 
-                var lastMessage = messages.LastOrDefault() as Message;
-                var last = lastMessage;
-                if (last != null)
-                    offsetId = last.id;
-                else
+                offsetId = pageMessages.Min(m => m.id);
+                if (shouldStop) break;
+            }
+        }
+
+        private static async Task DownloadTopicTextsAsync(Client client, InputPeer peer, int topicId, string dir, DateTime cutoffUtc)
+        {
+            var offsetId = 0;
+            while (true)
+            {
+                var history = await client.Messages_GetReplies(peer, topicId, offsetId, DateTime.MinValue, 0, 100, 0, 0, 0);
+                var messages = GetHistoryMessages(history);
+                var senderMap = BuildSenderMap(history);
+                if (messages == null || messages.Count == 0)
                     break;
 
+                var pageMessages = messages.OfType<Message>().ToList();
+                if (pageMessages.Count == 0)
+                    break;
+
+                var shouldStop = false;
+                foreach (var msg in pageMessages.OrderByDescending(m => m.date))
+                {
+                    var msgDate = msg.date.ToUniversalTime();
+                    if (msgDate < cutoffUtc)
+                    {
+                        shouldStop = true;
+                        break;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(msg.message))
+                    {
+                        var filePath = SaveTextMessage(dir, msg.id, msgDate, msg.message);
+                        if (!string.IsNullOrWhiteSpace(filePath))
+                        {
+                            var sender = GetSenderLabel(msg, senderMap);
+                            var senderId = GetSenderId(msg);
+                            var views = GetMessageViews(msg);
+                            var replies = GetMessageReplies(msg);
+                            var replyToId = GetReplyToMessageId(msg);
+                            AppendMessageLog(dir, msgDate, msg.id, sender, senderId, views, replies, replyToId, "neutral");
+                        }
+                    }
+                }
+
+                offsetId = pageMessages.Min(m => m.id);
                 if (shouldStop) break;
             }
         }
@@ -527,7 +744,7 @@ namespace ChatT30P.Controllers.Api
                 Directory.CreateDirectory(dir);
                 var fileName = $"{msgDate:yyyyMMdd_HHmmss}_{messageId}.txt";
                 var path = Path.Combine(dir, fileName);
-                if (File.Exists(path)) return path;
+                if (File.Exists(path)) return null;
                 File.WriteAllText(path, text);
                 return path;
             }
@@ -537,19 +754,113 @@ namespace ChatT30P.Controllers.Api
             }
         }
 
-        private static void AppendMessageLog(string dir, DateTime msgDate, int messageId, string sender, int views, int replies, string sentiment)
+        private static void AppendMessageLog(string dir, DateTime msgDate, int messageId, string sender, string senderId, int views, int replies, long? replyToId, string sentiment)
         {
             try
             {
                 Directory.CreateDirectory(dir);
                 var logPath = Path.Combine(dir, "messages.log");
                 var safeSender = (sender ?? string.Empty).Replace("|", "/");
-                var safeSentiment = (sentiment ?? string.Empty).Replace("|", "/");
-                var line = $"{msgDate:O}|{messageId}|{safeSender}|{views}|{replies}|{safeSentiment}";
-                File.AppendAllText(logPath, line + Environment.NewLine);
+                var safeSenderId = (senderId ?? string.Empty).Replace("|", "/");
+                var safeSentiment = NormalizeSentimentCode(sentiment);
+                var replyValue = replyToId.HasValue && replyToId.Value > 0 ? replyToId.Value.ToString() : "0";
+                var line = $"{msgDate:yyyy-MM-ddTHH:mm:ss}|{messageId}|{safeSender}|{safeSenderId}|{views}|{replies}|{replyValue}|{safeSentiment}";
+                var lines = File.Exists(logPath) ? File.ReadAllLines(logPath).ToList() : new List<string>();
+                var replaced = false;
+                for (var i = 0; i < lines.Count; i++)
+                {
+                    var existing = lines[i];
+                    if (string.IsNullOrWhiteSpace(existing)) continue;
+                    var parts = existing.Split('|');
+                    if (parts.Length < 8) continue;
+                    if (!string.Equals(parts[0], msgDate.ToString("yyyy-MM-ddTHH:mm:ss"), StringComparison.OrdinalIgnoreCase)) continue;
+                    if (!string.Equals(parts[3], safeSenderId, StringComparison.OrdinalIgnoreCase)) continue;
+                    lines[i] = line;
+                    replaced = true;
+                    break;
+                }
+                if (!replaced)
+                    lines.Add(line);
+                File.WriteAllLines(logPath, lines);
             }
             catch
             {
+            }
+        }
+
+        private static long? GetReplyToMessageId(Message messageObj)
+        {
+            if (messageObj == null) return null;
+
+            try
+            {
+                var messageType = messageObj.GetType();
+
+                // 1. Получаем поле reply_to
+                var replyToProp = messageType.GetProperty("reply_to")
+                               ?? messageType.GetProperty("ReplyTo");   // иногда PascalCase
+
+                if (replyToProp == null) return null;
+
+                var replyHeader = replyToProp.GetValue(messageObj);
+                if (replyHeader == null) return null;
+
+                var replyValue = TryGetMemberValue(replyHeader, "reply_to_msg_id")
+                    ?? TryGetMemberValue(replyHeader, "replyToMsgId");
+                if (replyValue is int intId && intId > 0) return intId;
+                if (replyValue is long longId && longId > 0) return longId;
+
+                var topValue = TryGetMemberValue(replyHeader, "reply_to_top_id")
+                    ?? TryGetMemberValue(replyHeader, "ReplyToTopId");
+                if (topValue is int t && t > 0) return t;
+                if (topValue is long tl && tl > 0) return tl;
+            }
+            catch
+            {
+                // silent fail как у тебя
+            }
+
+            return null;
+        }
+
+        private static string GetSenderId(Message msg)
+        {
+            if (msg == null) return string.Empty;
+            if (msg.from_id is PeerUser pu)
+                return pu.user_id.ToString();
+            if (msg.from_id is PeerChannel pc)
+                return pc.channel_id.ToString();
+            if (msg.from_id is PeerChat pch)
+                return pch.chat_id.ToString();
+            if (msg.peer_id is PeerUser pui)
+                return pui.user_id.ToString();
+            if (msg.peer_id is PeerChannel pci)
+                return pci.channel_id.ToString();
+            if (msg.peer_id is PeerChat pchi)
+                return pchi.chat_id.ToString();
+            return string.Empty;
+        }
+
+        private static string NormalizeSentimentCode(string sentiment)
+        {
+            if (string.IsNullOrWhiteSpace(sentiment)) return "O";
+            switch (sentiment.Trim().ToLowerInvariant())
+            {
+                case "positive":
+                case "p":
+                    return "P";
+                case "negative":
+                case "n":
+                    return "N";
+                case "neutral":
+                case "u":
+                case "0":
+                    return "U";
+                case "unknown":
+                case "o":
+                    return "O";
+                default:
+                    return "O";
             }
         }
 
@@ -776,52 +1087,25 @@ namespace ChatT30P.Controllers.Api
             }
         }
 
-        private void EnsureMonitoringChatsTable()
-        {
-            if (string.IsNullOrWhiteSpace(ConnectionString)) return;
-            try
-            {
-                using (var cn = new SqlConnection(ConnectionString))
-                using (var cmd = cn.CreateCommand())
-                {
-                    cmd.CommandText = @"
- IF OBJECT_ID('dbo.chats', 'U') IS NULL
- BEGIN
-     CREATE TABLE dbo.chats(
-         id INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
-         user_id NVARCHAR(128) NOT NULL,
-         phone NVARCHAR(64) NULL,
-         chat_id NVARCHAR(128) NOT NULL,
-         comment NVARCHAR(512) NULL,
-         updated_at DATETIME NOT NULL DEFAULT(GETDATE())
-     );
-     CREATE INDEX IX_chats_user_id ON dbo.chats(user_id);
-     CREATE UNIQUE INDEX IX_chats_user_chat ON dbo.chats(user_id, chat_id);
- END
- ELSE IF COL_LENGTH('dbo.chats','phone') IS NULL
- BEGIN
-     ALTER TABLE dbo.chats ADD phone NVARCHAR(64) NULL;
- END
- ELSE IF COL_LENGTH('dbo.chats','comment') IS NULL
- BEGIN
-     ALTER TABLE dbo.chats ADD comment NVARCHAR(512) NULL;
- END";
-                    cn.Open();
-                    cmd.ExecuteNonQuery();
-                }
-            }
-            catch (Exception ex)
-            {
-                LogAdsPowerError("EnsureMonitoringChatsTable failed.", ex);
-            }
-        }
-
         private class ChannelMeta
         {
-            public bool IsMegagroup { get; set; }
-            public bool IsForum { get; set; }
             public List<object> Topics { get; set; }
-            public string AvatarUrl { get; set; }
+        }
+
+        private static bool HasFlagValue(object flagsObj, string flagName)
+        {
+            try
+            {
+                if (flagsObj == null || string.IsNullOrWhiteSpace(flagName)) return false;
+                var flagsType = flagsObj.GetType();
+                if (!flagsType.IsEnum) return false;
+                var flagValue = Enum.Parse(flagsType, flagName, true);
+                return ((Enum)flagsObj).HasFlag((Enum)flagValue);
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private List<object> ExtractChatItemsFromDialogs(dynamic dialogs, Dictionary<string, ChannelMeta> metaMap)
@@ -838,10 +1122,9 @@ namespace ChatT30P.Controllers.Api
                     string last = null;
                     string username = null;
                     string baseId = null;
+                    List<object> topics = null;
                     bool isMegagroup = false;
                     bool isForum = false;
-                    List<object> topics = null;
-                    string avatarUrl = null;
                     try
                     {
                         var peer = d.peer;
@@ -860,11 +1143,16 @@ namespace ChatT30P.Controllers.Api
                             dynamic chats = dd.chats;
                             dynamic c = chats[pc.chat_id];
                             title = (string)c.Title;
-                            isMegagroup = false;
-                            isForum = false;
+                            try
+                            {
+                                var flags = c.flags;
+                                isMegagroup = HasFlagValue(flags, "megagroup");
+                                isForum = HasFlagValue(flags, "forum");
+                            }
+                            catch { }
                             if (metaMap != null && !string.IsNullOrWhiteSpace(baseId) && metaMap.TryGetValue(baseId, out var chatMeta))
                             {
-                                avatarUrl = chatMeta.AvatarUrl;
+                                topics = chatMeta.Topics;
                             }
                         }
                         else if (peer is PeerChannel pch)
@@ -876,16 +1164,18 @@ namespace ChatT30P.Controllers.Api
                             dynamic c = chats[pch.channel_id];
                             title = (string)c.Title;
                             try { username = (string)c.username; } catch { try { username = (string)c.Username; } catch { } }
+                            try
+                            {
+                                var flags = c.flags;
+                                isMegagroup = HasFlagValue(flags, "megagroup");
+                                isForum = HasFlagValue(flags, "forum");
+                            }
+                            catch { }
                             if (!string.IsNullOrWhiteSpace(username))
                                 id = id + ":" + username;
-                            try { isMegagroup = (bool)c.megagroup; } catch { }
-                            try { isForum = (bool)c.forum; } catch { }
                             if (metaMap != null && !string.IsNullOrWhiteSpace(baseId) && metaMap.TryGetValue(baseId, out var meta))
                             {
-                                isMegagroup = meta.IsMegagroup;
-                                isForum = meta.IsForum;
                                 topics = meta.Topics;
-                                avatarUrl = meta.AvatarUrl;
                             }
                         }
 
@@ -935,7 +1225,7 @@ namespace ChatT30P.Controllers.Api
                     catch { }
 
                     if (!string.IsNullOrWhiteSpace(id) && title != null)
-                        items.Add(new { id, title, type, last, username, isMegagroup, isForum, topics = topics ?? new List<object>(), avatarUrl });
+                        items.Add(new { id, title, type, last, username, topics = topics ?? new List<object>() });
                 }
             }
             catch
@@ -960,58 +1250,50 @@ namespace ChatT30P.Controllers.Api
                     if (chatBase is Channel channel)
                     {
                         var id = "channel:" + channel.id;
-                        var isForum = false;
                         var isMegagroup = false;
+                        var isForum = false;
                         try
                         {
                             dynamic dc = channel;
-                            isForum = (bool)dc.forum;
-                            isMegagroup = (bool)dc.megagroup;
+                            var flags = dc.flags;
+                            isMegagroup = HasFlagValue(flags, "megagroup");
+                            isForum = HasFlagValue(flags, "forum");
                         }
                         catch { }
                         if (!peers.TryGetValue(id, out var peer))
                             continue;
-                        if (!isForum || !isMegagroup)
+
+                        var topics = new List<object>();
+                        if (isMegagroup && isForum)
                         {
                             try
                             {
-                                dynamic dynClient = client;
-                                var full = await dynClient.Channels_GetFullChannel(new InputChannel(channel.id, channel.access_hash));
-                                try { isForum = (bool)full.full_chat.forum; } catch { }
-                                try { isMegagroup = (bool)full.full_chat.megagroup; } catch { }
+                                var resp = await client.Channels_GetAllForumTopics(peer);
+                                if (resp != null)
+                                {
+                                    dynamic d = resp;
+                                    if (d.topics != null)
+                                    {
+                                        foreach (var t in d.topics)
+                                        {
+                                            try
+                                            {
+                                                dynamic tDyn = t;
+                                                var tid = (int)tDyn.id;
+                                                var ttitle = (string)tDyn.title;
+                                                topics.Add(new { id = tid, title = ttitle });
+                                            }
+                                            catch { }
+                                        }
+                                    }
+                                }
+
                             }
                             catch { }
                         }
-                        var topics = new List<object>();
-                        try
-                        {
-                            dynamic dynClient = client;
-                            if (isForum)
-                            {
-                                dynamic resp = await dynClient.Messages_GetForumTopics(peer, 0, 0, 0, 100, 0);
-                                if (resp != null && resp.topics != null)
-                                {
-                                    foreach (var t in resp.topics)
-                                    {
-                                        try
-                                        {
-                                            var tid = (int)t.id;
-                                            var ttitle = (string)t.title;
-                                            topics.Add(new { id = tid, title = ttitle });
-                                        }
-                                        catch { }
-                                    }
-                                }
-                            }
-                        }
-                        catch { }
-                        var avatarUrl = await DownloadPeerAvatarAsync(client, peer, id);
                         result[id] = new ChannelMeta
                         {
-                            IsMegagroup = isMegagroup,
-                            IsForum = isForum,
-                            Topics = topics,
-                            AvatarUrl = avatarUrl
+                            Topics = topics
                         };
                     }
                     else if (chatBase is Chat chat)
@@ -1019,13 +1301,9 @@ namespace ChatT30P.Controllers.Api
                         var id = "chat:" + chat.id;
                         if (!peers.TryGetValue(id, out var peer))
                             continue;
-                        var avatarUrl = await DownloadPeerAvatarAsync(client, peer, id);
                         result[id] = new ChannelMeta
                         {
-                            IsMegagroup = false,
-                            IsForum = false,
-                            Topics = new List<object>(),
-                            AvatarUrl = avatarUrl
+                            Topics = new List<object>()
                         };
                     }
                 }
@@ -1041,21 +1319,96 @@ namespace ChatT30P.Controllers.Api
             try
             {
                 if (client == null || peer == null || string.IsNullOrWhiteSpace(chatId)) return null;
-                var baseDir = HttpContext.Current?.Server?.MapPath("~/Content/chat_avatars") ?? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Content", "chat_avatars");
+                try { LogAdsPowerError($"DownloadPeerAvatarAsync start. chatId={chatId}"); } catch { }
+                var baseDir = HttpContext.Current?.Server?.MapPath("~/Content/ava") ?? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Content", "ava");
                 Directory.CreateDirectory(baseDir);
                 var fileName = NormalizeChatFolderName(chatId) + ".jpg";
                 var path = Path.Combine(baseDir, fileName);
+                if (File.Exists(path) && new FileInfo(path).Length > 0)
+                    return "/Content/ava/" + fileName;
                 if (File.Exists(path))
-                    return "/Content/chat_avatars/" + fileName;
-                using (var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None))
+                    File.Delete(path);
+
+                ChatFullBase full = null;
+                try
                 {
-                    dynamic dynClient = client;
-                    await dynClient.DownloadProfilePhoto(peer, fs);
+                    if (peer is InputPeerChannel ipc)
+                    {
+                        var inputChannel = new InputChannel(ipc.channel_id, ipc.access_hash);
+                        var fullChannel = await client.Channels_GetFullChannel(inputChannel);
+                        full = fullChannel.full_chat;  // messages.ChatFull
+                    }
+                    else if (peer is InputPeerChat ipchat)
+                    {
+                        var fullChat = await client.Messages_GetFullChat(ipchat.chat_id);
+                        full = fullChat.full_chat;     // messages.ChatFull
+                    }
+                    else
+                    {
+                        // User или другой peer — аватарку чата не скачиваем
+                        return null;
+                    }
                 }
-                return "/Content/chat_avatars/" + fileName;
+                catch (RpcException ex)
+                {
+                    LogAdsPowerError($"GetFull failed for chatId={chatId}: {ex.Message} (code {ex.Code})");
+                    return null;
+                }
+                catch (Exception ex)
+                {
+                    LogAdsPowerError($"Unexpected error getting full chat {chatId}: {ex}");
+                    return null;
+                }
+
+                if (full == null) return null;
+
+                // Единая логика получения Photo
+                Photo photo = full.ChatPhoto as Photo;
+                if (photo == null || photo is PhotoEmpty)
+                {
+                    LogAdsPowerError($"No valid chat_photo for chatId={chatId}");
+                    return null;
+                }
+
+                try
+                {
+                    var smallSize = photo.sizes
+    .OfType<PhotoSize>()  // игнор cached/stripped
+    .OrderBy(s => s.w * s.h)  // по размеру
+    .FirstOrDefault();
+                    using (var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None))
+                    {
+                        await client.DownloadFileAsync(photo, fs, smallSize);  // ← вот это главное
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LogAdsPowerError($"DownloadFileAsync failed for chatId={chatId}: {ex.Message}");
+                    try { if (File.Exists(path)) File.Delete(path); } catch { }
+                    return null;
+                }
+
+                var info = new FileInfo(path);
+                if (!info.Exists || info.Length == 0)
+                {
+                    try { if (File.Exists(path)) File.Delete(path); } catch { }
+                    LogAdsPowerError($"Downloaded file empty or missing: chatId={chatId}, file={fileName}");
+                    return null;
+                }
+
+                LogAdsPowerError($"Avatar downloaded: chatId={chatId}, file={fileName}, size={info.Length} bytes");
+                return "/Content/ava/" + fileName;
             }
-            catch
+            catch (TL.RpcException ex)
             {
+                if (ex.Message != null && ex.Message.IndexOf("AUTH_KEY_UNREGISTERED", StringComparison.OrdinalIgnoreCase) >= 0)
+                    throw;
+                try { LogAdsPowerError("DownloadPeerAvatarAsync failed.", ex); } catch { }
+                return null;
+            }
+            catch (Exception ex)
+            {
+                try { LogAdsPowerError("DownloadPeerAvatarAsync failed.", ex); } catch { }
                 return null;
             }
         }
@@ -1193,7 +1546,23 @@ WHERE user_id=@user_id AND platform=@platform AND phone=@phone";
                     var sessionFile = GetTelegramSessionFilePath(userId, normPhone);
                     var sessionText = ReadSessionTextFromFile(sessionFile);
                     if (string.IsNullOrWhiteSpace(sessionText))
+                    {
+                        try
+                        {
+                            using (var cn = new SqlConnection(ConnectionString))
+                            using (var cmd = cn.CreateCommand())
+                            {
+                                cmd.CommandText = "UPDATE accounts SET status = 1 WHERE user_id=@user_id AND platform=@platform AND phone=@phone";
+                                cmd.Parameters.Add("@user_id", SqlDbType.NVarChar, 128).Value = userId;
+                                cmd.Parameters.Add("@platform", SqlDbType.NVarChar, 32).Value = normPlatform;
+                                cmd.Parameters.Add("@phone", SqlDbType.NVarChar, 64).Value = normPhone;
+                                cn.Open();
+                                cmd.ExecuteNonQuery();
+                            }
+                        }
+                        catch { }
                         return Request.CreateResponse(HttpStatusCode.BadRequest, new { Message = "Аккаунт не залогинен. Сначала выполните вход." });
+                    }
                     var sessionSemaphore = GetSessionSemaphore(sessionFile);
                     await sessionSemaphore.WaitAsync();
                     try
@@ -1244,7 +1613,23 @@ WHERE user_id=@user_id AND platform=@platform AND phone=@phone";
                             return Request.CreateResponse(HttpStatusCode.Unauthorized, new { Message = "Сессия невалидна. Требуется повторный вход.", Code = "AUTH_KEY_UNREGISTERED" });
                         }
                         if (msg.IndexOf("verification_code", StringComparison.OrdinalIgnoreCase) >= 0)
+                        {
+                            try
+                            {
+                                using (var cn = new SqlConnection(ConnectionString))
+                                using (var cmd = cn.CreateCommand())
+                                {
+                                    cmd.CommandText = "UPDATE accounts SET status = 1 WHERE user_id=@user_id AND platform=@platform AND phone=@phone";
+                                    cmd.Parameters.Add("@user_id", SqlDbType.NVarChar, 128).Value = userId;
+                                    cmd.Parameters.Add("@platform", SqlDbType.NVarChar, 32).Value = normPlatform;
+                                    cmd.Parameters.Add("@phone", SqlDbType.NVarChar, 64).Value = normPhone;
+                                    cn.Open();
+                                    cmd.ExecuteNonQuery();
+                                }
+                            }
+                            catch { }
                             return Request.CreateResponse(HttpStatusCode.BadRequest, new { Message = "Требуется авторизация аккаунта. Сначала выполните вход." });
+                        }
                         throw;
                     }
                     finally
@@ -2174,71 +2559,10 @@ VALUES(@ads_power_id, @script_name, @value, @puppeteer)";
 
                             // Load dialogs (best-effort)
                             var dialogs = await client.Messages_GetDialogs();
-
-                            var items = new List<object>();
-                            try
-                            {
-                                dynamic dd = dialogs;
-                                foreach (var d in dd.dialogs)
-                                {
-                                    string id = null;
-                                    string title = null;
-                                    string type = null;
-                                    string last = null;
-                                    try
-                                    {
-                                        var peer = d.peer;
-                                        if (peer is PeerUser pu)
-                                        {
-                                            // Skip user dialogs per requirements
-                                            id = null;
-                                            type = null;
-                                            title = null;
-                                        }
-                                        else if (peer is PeerChat pc)
-                                        {
-                                            id = "chat:" + pc.chat_id;
-                                            type = "chat";
-                                            dynamic chats = dd.chats;
-                                            dynamic c = chats[pc.chat_id];
-                                            title = (string)c.Title;
-                                        }
-                                        else if (peer is PeerChannel pch)
-                                        {
-                                            id = "channel:" + pch.channel_id;
-                                            type = "channel";
-                                            dynamic chats = dd.chats;
-                                            dynamic c = chats[pch.channel_id];
-                                            title = (string)c.Title;
-                                        }
-
-                                        // last message preview (best-effort)
-                                        try
-                                        {
-                                            if (d.top_message != null)
-                                            {
-                                                int topId = (int)d.top_message;
-                                                dynamic messages = dd.messages;
-                                                dynamic m = messages[topId];
-                                                try { last = (string)m.message; }
-                                                catch { try { last = (string)m.Message; } catch { } }
-                                            }
-                                        }
-                                        catch { }
-                                    }
-                                    catch { }
-
-                                    if (!string.IsNullOrWhiteSpace(id) && title != null)
-                                        items.Add(new { id, title, type, last });
-                                }
-                            }
-                            catch
-                            {
-                                // ignore dialogs parsing differences between TL versions
-                            }
+                            var metaMap = await LoadPeerMetaAsync(client, dialogs);
+                            var items = ExtractChatItemsFromDialogs(dialogs, metaMap);
 
                             var chatsJson = JsonConvert.SerializeObject(items);
-
                             SaveChatsJson(userId, normPlatform, normPhone, chatsJson);
                             UpdateTelegramCodeState(userId, normPlatform, normPhone, null);
                             try
@@ -2537,9 +2861,77 @@ WHERE user_id = @user_id AND platform = @platform AND phone = @phone";
 
                 cn.Open();
                 var affected = cmd.ExecuteNonQuery();
+                if (affected > 0)
+                {
+                    try
+                    {
+                        using (var cleanup = cn.CreateCommand())
+                        {
+                            cleanup.CommandText = "DELETE FROM dbo.chats WHERE user_id=@user_id AND phone=@phone";
+                            cleanup.Parameters.Add("@user_id", SqlDbType.NVarChar, 128).Value = userId;
+                            cleanup.Parameters.Add("@phone", SqlDbType.NVarChar, 64).Value = phone.Trim();
+                            cleanup.ExecuteNonQuery();
+                        }
+                    }
+                    catch
+                    {
+                    }
+                }
                 return Request.CreateResponse(affected > 0 ? HttpStatusCode.OK : HttpStatusCode.NotFound);
             }
         }
+
+    private void TryTerminateTelegramSession(string userId, string phone)
+    {
+        try
+        {
+            var apiId = GetTelegramApiIdOrNull();
+            var apiHash = GetTelegramApiHashOrNull();
+            if (string.IsNullOrWhiteSpace(apiId) || string.IsNullOrWhiteSpace(apiHash)) return;
+            var sessionFile = GetTelegramSessionFilePath(userId, phone);
+            if (!File.Exists(sessionFile)) return;
+
+            var sessionSemaphore = GetSessionSemaphore(sessionFile);
+            if (!sessionSemaphore.Wait(TimeSpan.FromSeconds(5)))
+            {
+                LogAdsPowerError("TryTerminateTelegramSession: semaphore timeout.");
+                return;
+            }
+            try
+            {
+                var task = Task.Run(async () =>
+                {
+                    using (var client = new Client(what =>
+                    {
+                        switch (what)
+                        {
+                            case "api_id": return apiId;
+                            case "api_hash": return apiHash;
+                            case "phone_number": return phone;
+                            case "session_pathname": return sessionFile;
+                            default: return null;
+                        }
+                    }))
+                    {
+                        await client.ConnectAsync();
+                        await client.Auth_LogOut();
+                    }
+                });
+                if (!task.Wait(TimeSpan.FromSeconds(10)))
+                {
+                    LogAdsPowerError("TryTerminateTelegramSession: logout timeout.");
+                }
+            }
+            finally
+            {
+                sessionSemaphore.Release();
+            }
+        }
+        catch (Exception ex)
+        {
+            try { LogAdsPowerError("TryTerminateTelegramSession failed.", ex); } catch { }
+        }
+    }
 
         private void DeleteAdsPowerProfile(string adsPowerId)
         {

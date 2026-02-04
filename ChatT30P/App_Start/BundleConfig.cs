@@ -37,6 +37,7 @@ public class BundleConfig
             .Include("~/controllers/chataccounts.js")
             .Include("~/controllers/chats.js")
             .Include("~/controllers/messages.js")
+            .Include("~/controllers/problems.js")
             .Include("~/controllers/users.js")
             .Include("~/scripts/bootstrap.js")
             .Include("~/scripts/moment.js")

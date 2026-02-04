@@ -372,9 +372,19 @@
     $rootScope.selectedChatObjects = $rootScope.selectedChatObjects || [];
     $rootScope.selectedChatMap = $rootScope.selectedChatMap || {};
     $rootScope.onlyChatType = false;
+    $rootScope.onlyForumType = false;
+    $rootScope.toggleChatTypeFilter = function (type) {
+        if (type === 'chat' && $rootScope.onlyChatType) {
+            $rootScope.onlyForumType = false;
+        }
+        if (type === 'forum' && $rootScope.onlyForumType) {
+            $rootScope.onlyChatType = false;
+        }
+    };
     $rootScope.chatTypeFilter = function (item) {
-        if (!$rootScope.onlyChatType) return true;
-        return item && item.type === 'chat';
+        if ($rootScope.onlyChatType && (!item || item.type !== 'chat')) return false;
+        if ($rootScope.onlyForumType && (!item || !item.hasTopics)) return false;
+        return true;
     };
     $rootScope._savingChatSelection = false;
     $rootScope._refreshingChats = false;
@@ -407,6 +417,65 @@
         $rootScope.syncSelectedChatObjects();
     };
 
+    function buildTopicChatId(chatId, topicId) {
+        if (!chatId) return chatId;
+        var marker = ':topic:';
+        var idx = ('' + chatId).toLowerCase().lastIndexOf(marker);
+        var base = idx >= 0 ? ('' + chatId).substring(0, idx) : chatId;
+        return base + marker + topicId;
+    }
+
+    function buildChatSelectionList(list) {
+        var result = [];
+        if (!Array.isArray(list)) return result;
+        for (var i = 0; i < list.length; i++) {
+            var chat = list[i];
+            if (!chat) continue;
+            var topics = chat.topics || chat.Topics;
+            var hasTopics = Array.isArray(topics) && topics.length > 0;
+            if (hasTopics) {
+                var baseTitleValue = chat.title || chat.Title || '';
+                if (baseTitleValue && baseTitleValue.indexOf('(все топики)') < 0) {
+                    var baseCopy = angular.copy(chat);
+                    baseCopy.title = baseTitleValue + ' (все топики)';
+                    baseCopy.hasTopics = true;
+                    result.push(baseCopy);
+                } else {
+                    chat.hasTopics = true;
+                    result.push(chat);
+                }
+            } else {
+                chat.hasTopics = false;
+                result.push(chat);
+                continue;
+            }
+            var baseId = chat.id || chat.Id;
+            if (!baseId) continue;
+            var baseTitle = chat.title || chat.Title || '';
+            var username = chat.username || chat.Username;
+            for (var j = 0; j < topics.length; j++) {
+                var topic = topics[j];
+                if (!topic) continue;
+                var topicId = topic.id || topic.Id;
+                if (topicId === undefined || topicId === null || topicId === '') continue;
+                var topicTitle = topic.title || topic.Title || '';
+                var title = baseTitle;
+                if (topicTitle) title = (baseTitle ? (baseTitle + ' - ' + topicTitle) : topicTitle);
+                result.push({
+                    id: buildTopicChatId(baseId, topicId),
+                    title: title,
+                    type: 'topic',
+                    last: null,
+                    username: username,
+                    hasTopics: true,
+                    topicId: topicId,
+                    parentId: baseId
+                });
+            }
+        }
+        return result;
+    }
+
     function updateAvailableChatsFromJson(json) {
         var list = [];
         if (json) {
@@ -416,7 +485,7 @@
             } catch (e) {
             }
         }
-        $rootScope.availableChats = list;
+        $rootScope.availableChats = buildChatSelectionList(list);
         $rootScope.syncSelectedChatObjects();
     }
 
@@ -634,7 +703,7 @@
                 if (Array.isArray(arr)) list = arr;
             } catch (e) { }
         }
-        $rootScope.availableChats = list;
+        $rootScope.availableChats = buildChatSelectionList(list);
 
         // load current selections
         var phone = item.Phone || item.phone;
@@ -669,10 +738,10 @@
         };
         $http.post('/api/ChatAccounts/StartLoadChats', payload).then(function (r) {
             if (Array.isArray(r.data)) {
-                $rootScope.availableChats = r.data;
+                $rootScope.availableChats = buildChatSelectionList(r.data);
                 $rootScope.syncSelectedChatObjects();
             } else if (r && r.data && r.data.chats) {
-                $rootScope.availableChats = r.data.chats;
+                $rootScope.availableChats = buildChatSelectionList(r.data.chats);
                 $rootScope.syncSelectedChatObjects();
             } else {
                 $rootScope.refreshChatsFromAccount();

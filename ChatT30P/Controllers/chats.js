@@ -8,6 +8,7 @@
     $scope.totalMessages = 0;
     $scope.periodStart = null;
     $scope.periodEnd = null;
+    $scope.activeRange = 'month';
 
     if (!$scope.isPaid && window.$) {
         $("#modal-no-subscription").modal();
@@ -22,20 +23,50 @@
         }
     };
 
+    $scope.getToneTotal = function (item) {
+        if (!item) return 0;
+        return (item.PositiveCount || 0)
+            + (item.NeutralCount || 0)
+            + (item.NegativeCount || 0)
+            + (item.UnknownCount || 0);
+    };
+
+    $scope.getToneWidth = function (item, key) {
+        var total = $scope.getToneTotal(item);
+        if (total <= 0) return '0%';
+        var value = 0;
+        switch (key) {
+            case 'positive': value = item.PositiveCount || 0; break;
+            case 'neutral': value = item.NeutralCount || 0; break;
+            case 'negative': value = item.NegativeCount || 0; break;
+            case 'unknown': value = item.UnknownCount || 0; break;
+        }
+        return (value / total * 100).toFixed(1) + '%';
+    };
+
     $scope.setQuickRange = function (range) {
+        $scope.activeRange = range;
         var now = new Date();
         var start = new Date(now.getTime());
         if (range === 'today') {
             start.setHours(0, 0, 0, 0);
         } else if (range === 'week') {
             start.setDate(start.getDate() - 7);
+            start.setHours(0, 0, 0, 0);
         } else if (range === '2months') {
             start.setMonth(start.getMonth() - 2);
+            start.setHours(0, 0, 0, 0);
         } else {
             start.setMonth(start.getMonth() - 1);
+            start.setHours(0, 0, 0, 0);
         }
         $scope.periodStart = start;
         $scope.periodEnd = now;
+        $scope.refresh();
+    };
+
+    $scope.onPeriodChange = function () {
+        $scope.activeRange = null;
         $scope.refresh();
     };
 
@@ -58,7 +89,11 @@
         var url = '/api/Chats';
         var qs = [];
         if ($scope.periodStart) qs.push('start=' + encodeURIComponent(formatDate($scope.periodStart)));
-        if ($scope.periodEnd) qs.push('end=' + encodeURIComponent(formatDate($scope.periodEnd)));
+        if ($scope.periodEnd) {
+            var endDate = new Date($scope.periodEnd);
+            endDate.setDate(endDate.getDate() + 1);
+            qs.push('end=' + encodeURIComponent(formatDate(endDate)));
+        }
         if (qs.length > 0) url += '?' + qs.join('&');
         $http.get(url).then(function (r) {
             $scope.items = r.data || [];
@@ -126,6 +161,7 @@
         start.setMonth(start.getMonth() - 1);
         $scope.periodStart = start;
         $scope.periodEnd = now;
+        $scope.activeRange = 'month';
         $scope.refresh();
     }
 }]);

@@ -21,17 +21,17 @@
                     <input type="text" class="form-control" placeholder="Поиск по названию чата..." data-ng-model="$parent.searchText" />
                 </div>
                 <div class="col-md-3">
-                    <input type="date" class="form-control" data-ng-model="periodStart" data-ng-change="refresh()" />
+                    <input type="date" class="form-control" data-ng-model="periodStart" data-ng-change="onPeriodChange()" />
                 </div>
                 <div class="col-md-3">
-                    <input type="date" class="form-control" data-ng-model="periodEnd" data-ng-change="refresh()" />
+                    <input type="date" class="form-control" data-ng-model="periodEnd" data-ng-change="onPeriodChange()" />
                 </div>
                 <div class="col-md-2">
                     <div class="btn-group" style="width:100%;">
-                        <button class="btn btn-default" data-ng-click="setQuickRange('today')">день</button>
-                        <button class="btn btn-default" data-ng-click="setQuickRange('week')">неделя</button>
-                        <button class="btn btn-default" data-ng-click="setQuickRange('month')">месяц</button>
-                        <button class="btn btn-default" data-ng-click="setQuickRange('2months')">2 месяца</button>
+                        <button class="btn btn-default" data-ng-class="{active: activeRange === 'today'}" data-ng-click="setQuickRange('today')">день</button>
+                        <button class="btn btn-default" data-ng-class="{active: activeRange === 'week'}" data-ng-click="setQuickRange('week')">неделя</button>
+                        <button class="btn btn-default" data-ng-class="{active: activeRange === 'month'}" data-ng-click="setQuickRange('month')">месяц</button>
+                        <button class="btn btn-default" data-ng-class="{active: activeRange === '2months'}" data-ng-click="setQuickRange('2months')">2 месяца</button>
                     </div>
                 </div>
                 <div class="col-md-2 text-right">
@@ -44,6 +44,7 @@
             <table class="table table-bordered table-striped table-hover table-responsive">
                 <thead>
                     <tr>
+                        <th style="width: 90px;">logo</th>
                         <th data-ng-click="setSort('Title')" class="cursor-pointer">
                             Название чата
                             <span data-ng-if="sortField === 'Title'">{{sortReverse ? '▼' : '▲'}}</span>
@@ -52,27 +53,50 @@
                             Сообщений
                             <span data-ng-if="sortField === 'MessageCount'">{{sortReverse ? '▼' : '▲'}}</span>
                         </th>
+                        <th style="width: 260px;">Эмоциональный окрас сообщений</th>
                         <th style="width: 220px;">Комментарий</th>
-                        <th style="width: 120px;">&nbsp;</th>
+                        <th style="width: 60px;">&nbsp;</th>
                     </tr>
                 </thead>
                 <tbody>
                     <tr data-ng-repeat="item in items | filter:chatFilter | orderBy:sortField:sortReverse">
                         <td>
+                            <span class="chat-avatar" data-ng-if="item.AvatarUrl">
+                                <img data-ng-src="{{item.AvatarUrl}}" style="border-radius:4px;" />
+                                <span class="chat-avatar-large" data-ng-style="{'background-image': 'url(' + item.AvatarUrl + ')'}"></span>
+                            </span>
+                        </td>
+                        <td>
                             <a class="cursor-pointer" data-ng-click="openMessages(item)">{{item.Title}}</a>
                         </td>
                         <td>{{item.MessageCount}}</td>
                         <td>
+                            <div style="display:flex; width:100%; height:32px; border-radius:4px; overflow:hidden; background:#eee;" data-ng-attr-title="Позитивные: {{item.PositiveCount || 0}} | Нейтральные: {{item.NeutralCount || 0}} | Негативные: {{item.NegativeCount || 0}} | Не определено: {{item.UnknownCount || 0}}">
+                                <div style="display:flex; align-items:center; justify-content:center; background-color:#5cb85c; color:#fff;" data-ng-style="{width: getToneWidth(item, 'positive')}">
+                                    <span data-ng-if="item.PositiveCount">{{item.PositiveCount}}</span>
+                                </div>
+                                <div style="display:flex; align-items:center; justify-content:center; background-color:#337ab7; color:#fff;" data-ng-style="{width: getToneWidth(item, 'neutral')}">
+                                    <span data-ng-if="item.NeutralCount">{{item.NeutralCount}}</span>
+                                </div>
+                                <div style="display:flex; align-items:center; justify-content:center; background-color:#d9534f; color:#fff;" data-ng-style="{width: getToneWidth(item, 'negative')}">
+                                    <span data-ng-if="item.NegativeCount">{{item.NegativeCount}}</span>
+                                </div>
+                                <div style="display:flex; align-items:center; justify-content:center; background-color:#999; color:#fff;" data-ng-style="{width: getToneWidth(item, 'unknown')}">
+                                    <span data-ng-if="item.UnknownCount">{{item.UnknownCount}}</span>
+                                </div>
+                            </div>
+                        </td>
+                        <td>
                             <input type="text" class="form-control" data-ng-model="item.Comment" data-ng-blur="saveComment(item)" />
                         </td>
                         <td>
-                            <button class="btn btn-danger btn-xs" data-ng-click="remove(item)" data-ng-disabled="item._deleting">
-                                Удалить
+                            <button class="btn btn-link text-danger" data-ng-click="remove(item)" data-ng-disabled="item._deleting" title="Удалить">
+                                <i class="fa fa-trash"></i>
                             </button>
                         </td>
                     </tr>
                     <tr data-ng-if="!items || items.length === 0">
-                        <td colspan="4" class="text-muted">Список чатов пуст.</td>
+                        <td colspan="6" class="text-muted">Список чатов пуст.</td>
                     </tr>
                 </tbody>
             </table>

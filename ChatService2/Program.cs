@@ -1,6 +1,7 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using WTelegram;
 
 namespace ChatService2
 {
@@ -8,6 +9,7 @@ namespace ChatService2
     {
         private static void Main(string[] args)
         {
+            Helpers.Log = (level, message) => { };
             Host.CreateDefaultBuilder(args)
                 .ConfigureLogging(logging =>
                 {
@@ -16,7 +18,7 @@ namespace ChatService2
                 })
                 .ConfigureServices((hostContext, services) =>
                 {
-                    services.AddHostedService<RpaTaskPollerService>();
+                    services.AddHostedService<ChatSyncWorkerService>();
                 })
                 .Build()
                 .Run();

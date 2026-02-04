@@ -13,6 +13,7 @@ using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Collections.Concurrent;
+using Newtonsoft.Json;
 
 namespace ChatService2
 {
@@ -104,6 +105,25 @@ namespace ChatService2
                     return;
                 }
 
+                // Convert collected title->preview map to the same array format as MTProto.
+                string chatsJson = result;
+                try
+                {
+                    var dict = JsonConvert.DeserializeObject<Dictionary<string, string>>(result) ?? new Dictionary<string, string>();
+                    var list = dict.Select(kv => new
+                    {
+                        id = kv.Key,
+                        title = kv.Key,
+                        type = "chat",
+                        last = kv.Value
+                    }).ToList();
+                    chatsJson = JsonConvert.SerializeObject(list);
+                }
+                catch (Exception ex)
+                {
+                    LogWarn(ex, "[Puppeteer] Failed to normalize chats_json for accId={AccId}", accId);
+                }
+
                 // Save collected JSON into accounts.chats_json for this ads_power_id
                 try
                 {
@@ -111,7 +131,7 @@ namespace ChatService2
                     using var cmd = cn.CreateCommand();
                     cmd.CommandTimeout = DbCommandTimeoutSeconds;
                     cmd.CommandText = @"UPDATE accounts SET chats_json = @chats WHERE ads_power_id = @ads_power_id";
-                    cmd.Parameters.Add("@chats", SqlDbType.NVarChar).Value = result;
+                    cmd.Parameters.Add("@chats", SqlDbType.NVarChar).Value = chatsJson;
                     cmd.Parameters.Add("@ads_power_id", SqlDbType.NVarChar, 128).Value = accId;
                     cn.Open();
                     var affected = cmd.ExecuteNonQuery();
