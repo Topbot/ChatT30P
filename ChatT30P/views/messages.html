@@ -3,7 +3,11 @@
 
     <div class="container admin-views-main" data-ng-controller="MessagesController">
         <div class="page-header clearfix">
-            <h2 class="page-title pull-left">Сообщения<span data-ng-if="chatTitle"> — {{chatTitle}}</span></h2>
+            <h2 class="page-title pull-left">Сообщения<span data-ng-if="chatTitle"> — {{chatTitle}}</span>
+                <a data-ng-if="chatUsername" class="external-link" data-ng-href="https://t.me/{{chatUsername}}" target="_blank" title="Открыть чат">
+                    <i class="fa fa-external-link"></i>
+                </a>
+            </h2>
             <div class="pull-right" style="margin-top:10px;">
                 <button class="btn btn-default" data-ng-click="exportExcel()" data-ng-disabled="_loading">
                     <i class="fa fa-file-excel-o"></i>Экспортировать в эксель
@@ -18,16 +22,16 @@
         <div class="alert alert-warning" data-ng-if="!isPaid">
             Для доступа к разделу требуется оплата.
         </div>
-        <div data-ng-if="isPaid">
-            <div class="row" style="margin-bottom: 10px;">
+            <div data-ng-if="isPaid">
+            <div class="row message-pagination-bottom" style="margin-bottom: 10px;">
                 <div class="col-md-4">
-                    <input type="text" class="form-control" placeholder="Поиск по сообщению..." data-ng-model="searchText" />
+                        <input type="text" class="form-control" placeholder="Поиск по сообщению..." data-ng-model="$parent.searchText" data-ng-change="applyMessageFilter()" />
                 </div>
                 <div class="col-md-3">
-                    <input type="date" class="form-control" data-ng-model="periodStart" data-ng-change="refresh()" />
+                        <input type="date" class="form-control" data-ng-model="$parent.periodStart" data-ng-change="refresh()" />
                 </div>
                 <div class="col-md-3">
-                    <input type="date" class="form-control" data-ng-model="periodEnd" data-ng-change="refresh()" />
+                        <input type="date" class="form-control" data-ng-model="$parent.periodEnd" data-ng-change="refresh()" />
                 </div>
                 <div class="col-md-2">
                     <div class="btn-group" style="width:100%;">
@@ -75,18 +79,14 @@
                             Просмотры
                             <span data-ng-if="sortField === 'Views'">{{sortReverse ? '▼' : '▲'}}</span>
                         </th>
-                        <th data-ng-click="setSort('Replies')" class="cursor-pointer" style="width: 120px;">
-                            Ответы
-                            <span data-ng-if="sortField === 'Replies'">{{sortReverse ? '▼' : '▲'}}</span>
-                        </th>
                         <th data-ng-click="setSort('Text')" class="cursor-pointer">
-                            Сообщение (Всего сообщений: {{totalMessages}})
+                            Сообщение (Сообщений по критериям: {{totalMessages}})
                             <span data-ng-if="sortField === 'Text'">{{sortReverse ? '▼' : '▲'}}</span>
                         </th>
                     </tr>
                 </thead>
                 <tbody>
-                    <tr class="message-row" data-ng-repeat="item in (filteredItems = (items | filter:messageFilter | orderBy:sortField:sortReverse)) | limitTo:pageSize:((currentPage-1)*pageSize)">
+                    <tr class="message-row" data-ng-repeat="item in (filteredItems | orderBy:sortField:sortReverse) | limitTo:pageSize:((currentPage-1)*pageSize)">
                         <td>
                             <span data-ng-attr-title="{{relativeDate(item)}}">{{item.DateText}}</span>
                         </td>
@@ -96,7 +96,6 @@
                             <span class="sentiment-dot sentiment-dot-positive" data-ng-if="item.Sentiment === 'positive'" title="Позитивное"></span>
                             <span class="sentiment-dot sentiment-dot-negative" data-ng-if="item.Sentiment === 'negative'" title="Негативное"></span>
                         </td>
-                        <td>{{item.Replies}}</td>
                         <td>
                             <div class="message-text">{{truncateMessage(item.Text)}}</div>
                             <div class="message-actions">
@@ -106,17 +105,38 @@
                                 <button class="btn btn-xs btn-default" data-ng-click="openMessage(item)" title="Открыть сообщение">
                                     <i class="fa fa-external-link"></i>
                                 </button>
-                                <button class="btn btn-xs btn-default" data-ng-click="setSentiment(item, 'positive')" title="Позитивное">+</button>
+                                <button class="btn btn-xs btn-success" data-ng-click="setSentiment(item, 'positive')" title="Позитивное">+</button>
                                 <button class="btn btn-xs btn-default" data-ng-click="setSentiment(item, 'neutral')" title="Нейтральное">0</button>
-                                <button class="btn btn-xs btn-default" data-ng-click="setSentiment(item, 'negative')" title="Негативное">-</button>
+                                <button class="btn btn-xs btn-danger" data-ng-click="setSentiment(item, 'negative')" title="Негативное">-</button>
+                                <span class="message-replies-count">ответов: {{item.Replies}}</span>
                             </div>
                         </td>
                     </tr>
                     <tr data-ng-if="!items || items.length === 0">
-                        <td colspan="3" class="text-muted">Список сообщений пуст.</td>
+                        <td colspan="4" class="text-muted">Список сообщений пуст.</td>
                     </tr>
                 </tbody>
             </table>
+
+            <div class="row" style="margin-bottom: 10px;">
+                <div class="col-md-3">
+                    <label style="display:inline-block; margin-right:5px; margin-top:7px;">Сообщений на странице:</label>
+                    <select class="form-control" style="display:inline-block; width:80px;" data-ng-model="pageSize" data-ng-options="s for s in pageSizes" data-ng-change="setPage(1)"></select>
+                </div>
+                <div class="col-md-9 text-right">
+                    <ul class="pagination" style="margin: 0;">
+                        <li data-ng-class="{disabled: currentPage <= 1}">
+                            <a href="" data-ng-click="prevPage()">&laquo;</a>
+                        </li>
+                        <li data-ng-repeat="p in visiblePages()" data-ng-class="{active: p === currentPage}">
+                            <a href="" data-ng-click="setPage(p)">{{p}}</a>
+                        </li>
+                        <li data-ng-class="{disabled: currentPage >= pageCount()}">
+                            <a href="" data-ng-click="nextPage()">&raquo;</a>
+                        </li>
+                    </ul>
+                </div>
+            </div>
         </div>
     </div>
 </div>

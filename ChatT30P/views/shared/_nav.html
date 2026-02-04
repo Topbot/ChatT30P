@@ -16,11 +16,12 @@
             <ul class="nav navbar-nav">
                 <li data-ng-class="{ active: isActive('/')}"><a href="#!/">Главная</a></li>
         <li data-ng-class="{ active: isActive('/chats')}" ><a href="#!/chats">Чаты</a></li>
+        <li data-ng-class="{ active: isActive('/problems')}" ><a href="#!/problems">Проблемы</a></li>
         <li ng-if="UserVars.IsAdmin" data-ng-class="{ active: isActive('/users')}" ><a href="#!/users">Пользователи</a></li>
             </ul>
             <ul class="nav navbar-nav navbar-right">
                 <li class="dropdown" ng-if="UserVars.IsAuthenticated">
-                    <a href="#" class="dropdown-toggle" data-toggle="dropdown"><i class="fa fa-user"></i> {{UserVars.Name}} <b class="caret"></b></a>
+                    <a href="#" class="dropdown-toggle" data-ng-click="toggleUserMenu($event)"><i class="fa fa-user"></i> {{UserVars.Name}} <b class="caret"></b></a>
                     <ul class="dropdown-menu">
                         <li><a href="/Account/change-password.aspx"><i class="fa fa-key"></i>{{lbl.changePassword}}</a></li>
                         <li role="presentation" class="divider"></li>

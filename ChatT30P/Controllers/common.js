@@ -1,4 +1,4 @@
-﻿angular.module('stats').controller('NavController', ["$scope", "$location", "$rootScope", function ($scope, $location, $rootScope) {
+﻿angular.module('stats').controller('NavController', ["$scope", "$location", "$rootScope", "$document", function ($scope, $location, $rootScope, $document) {
     $scope.isActive = function (viewLocation) {
         if (viewLocation == '/' && $location.path() == '/vkusers') return true;
         return viewLocation === $location.path() || $location.path().startsWith(viewLocation + "/");
@@ -12,6 +12,26 @@
         }
     }
     $scope.UserVars = UserVars;
+    $scope.toggleUserMenu = function ($event) {
+        if ($event) {
+            $event.preventDefault();
+            $event.stopPropagation();
+        }
+        var target = ($event && $event.currentTarget) ? $event.currentTarget : null;
+        var $dropdown = target ? angular.element(target).closest('.dropdown') : angular.element('.navbar-right .dropdown');
+        if ($dropdown && $dropdown.length) {
+            $dropdown.toggleClass('open');
+        }
+    };
+
+    var closeHandler = function () {
+        angular.element('.navbar-right .dropdown').removeClass('open');
+    };
+
+    $document.on('click', closeHandler);
+    $scope.$on('$destroy', function () {
+        $document.off('click', closeHandler);
+    });
 }]);
 
 angular.module('stats').controller('SubNavController', ["$scope", "$location", "$rootScope", function ($scope, $location, $rootScope) {

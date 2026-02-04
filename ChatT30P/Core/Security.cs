@@ -170,10 +170,16 @@ Stack Trace:
                     string encryptedTicket = FormsAuthentication.Encrypt(ticket);
 
                     // setting a custom cookie name based on the current blog instance.
-                    // if !rememberMe, set expires to DateTime.MinValue which makes the
-                    // cookie a browser-session cookie expiring when the browser is closed.
-                    HttpCookie cookie = new HttpCookie(FormsAuthCookieName, encryptedTicket);
-                    cookie.Expires = rememberMe ? expirationDate : DateTime.MinValue;
+                    // If rememberMe is false, leave Expires unset so the cookie is session-only.
+                    HttpCookie cookie = new HttpCookie(FormsAuthCookieName, encryptedTicket)
+                    {
+                        Path = FormsAuthentication.FormsCookiePath,
+                        HttpOnly = true
+                    };
+                    if (rememberMe)
+                    {
+                        cookie.Expires = expirationDate;
+                    }
                     context.Response.Cookies.Set(cookie);
 
                     string returnUrl = context.Request.QueryString["ReturnUrl"];
